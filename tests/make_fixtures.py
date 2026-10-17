@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""生成测试用的知乎页面快照（模拟真实页面的结构）。
-
+"""生成测试用的知乎页面快照 (模拟真实页面的结构). 
 真实页面里正文放在 <script id="js-initialData" type="text/json"> 的
-initialState.entities 里，正文本身是一段 HTML 字符串。这里用同样的结构造样例，
-这样即使没有网络也能把「解析 + 转换 + 落盘」整条链路跑通。
+initialState.entities 里, 正文本身是一段 HTML 字符串. 这里用同样的结构造样例, 
+这样即使没有网络也能把「解析 + 转换 + 落盘」整条链路跑通.
 
 运行：python tests/make_fixtures.py
+由 DeepSeek-V41-Flash 生成.
 """
 
 from __future__ import annotations
@@ -67,7 +67,6 @@ DOM_ONLY_CONTENT = """
 <pre lang="bash"><code>pip install nothing</code></pre>
 """
 
-
 def build_article_page() -> str:
     entity = {
         "id": ARTICLE_ID,
@@ -109,7 +108,6 @@ def build_article_page() -> str:
 </html>
 """
 
-
 def build_answer_page() -> str:
     entity = {
         "id": ANSWER_ID,
@@ -150,7 +148,6 @@ def build_answer_page() -> str:
 </html>
 """
 
-
 def build_dom_only_page() -> str:
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -164,13 +161,11 @@ def build_dom_only_page() -> str:
 </html>
 """
 
-
 def build_deleted_page() -> str:
     return """<!DOCTYPE html>
 <html><head><meta charset="utf-8"/><title>知乎 - 你似乎来到了没有知识存在的荒原</title></head>
 <body><p>你似乎来到了没有知识存在的荒原</p></body></html>
 """
-
 
 def main() -> None:
     FIXTURES.mkdir(parents=True, exist_ok=True)
@@ -184,7 +179,6 @@ def main() -> None:
         path = FIXTURES / name
         path.write_text(text, encoding="utf-8", newline="\n")
         print("wrote %s (%d bytes)" % (path, len(text)))
-
 
 if __name__ == "__main__":
     main()

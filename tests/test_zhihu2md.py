@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""zhihu2md 的离线测试：不联网，用真实的页面结构快照跑通整条链路。
+"""zhihu2md 的离线测试: 不联网, 用真实的页面结构快照跑通整条链路.
 
 运行：
     python -m unittest discover -s tests -v
     python tests/test_zhihu2md.py
+
+由 DeepSeek-v41-Flash 生成.
 """
 
 from __future__ import annotations
@@ -28,7 +30,6 @@ import zhihu2md as z  # noqa: E402
 TMP_ROOT = ROOT / ".testtmp"
 TMP_ROOT.mkdir(parents=True, exist_ok=True)
 
-
 @contextlib.contextmanager
 def temp_dir():
     path = TMP_ROOT / ("t-" + uuid.uuid4().hex[:10])
@@ -46,18 +47,14 @@ QUESTION_ID = "1914329673120347774"
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 512
 GIF = b"GIF89a" + b"\x00" * 512
 
-
 def read_fixture(name: str) -> str:
     return (FIXTURES / name).read_text(encoding="utf-8")
-
 
 def html_response(text: str):
     return 200, {"Content-Type": "text/html; charset=utf-8"}, text.encode("utf-8")
 
-
 class FakeHttp:
-    """替身 HttpClient：按 URL 片段返回固定响应。"""
-
+    """替身 HttpClient: 按 URL 片段返回固定响应."""
     def __init__(self, routes=None, fail_urls=(), cookie="z_c0=fake; d_c0=fake"):
         self.routes = routes or {}
         self.fail_urls = tuple(fail_urls)
@@ -75,8 +72,7 @@ class FakeHttp:
         if "zhimg.com" in url:
             is_gif = url.endswith(".gif")
             return 200, {"Content-Type": "image/gif" if is_gif else "image/png"}, GIF if is_gif else PNG
-        raise z.ZhihuError("测试里没有配置这个 URL：%s" % url)
-
+        raise z.ZhihuError("测试里没有配置这个 URL:%s" % url)
 
 def default_routes():
     return {
@@ -84,9 +80,7 @@ def default_routes():
         "answer/" + ANSWER_ID: html_response(read_fixture("answer_page.html")),
     }
 
-
-# --------------------------------------------------------------- 引用 -----
-
+# 引用
 class ParseRefTests(unittest.TestCase):
     def test_article_path(self):
         ref = z.parse_ref("p/2094715383932573257")
@@ -133,9 +127,7 @@ class ParseRefTests(unittest.TestCase):
         with self.assertRaises(z.ZhihuError):
             z.parse_ref("")
 
-
-# --------------------------------------------------------------- 工具 -----
-
+# 工具
 class UtilsTests(unittest.TestCase):
     def test_safe_filename_strips_illegal_chars(self):
         name = z.safe_filename('a/b\\c:d*e?f"g<h>i|j')
@@ -217,7 +209,7 @@ class UtilsTests(unittest.TestCase):
         self.assertEqual(z.normalize_cookie("z_c0=abc;"), "z_c0=abc")
 
     def test_normalize_cookie_from_curl_fragment_without_curl_word(self):
-        # 用户只复制了 cURL 的一部分（真实踩过的坑）
+        # 用户只复制了 cURL 的一部分...
         fragment = '-H ^"accept: */*^" -H ^"cookie: z_c0=AA; d_c0=BB^" --compressed'
         self.assertEqual(z.normalize_cookie(fragment), "z_c0=AA; d_c0=BB")
 
@@ -250,9 +242,7 @@ class UtilsTests(unittest.TestCase):
         self.assertEqual(z.guess_image_ext("", "https://pic1.zhimg.com/v2-abc_r.gif"), ".gif")
         self.assertEqual(z.guess_image_ext("", "https://pic1.zhimg.com/80/v2-abc"), ".jpg")
 
-
-# ---------------------------------------------------------- HTML 解析 -----
-
+# HTML 解析
 class HtmlParserTests(unittest.TestCase):
     def test_nested_list_stays_nested(self):
         root = z.parse_html("<ul><li>a</li><li>b<ul><li>n1</li></ul></li></ul>")
@@ -280,9 +270,7 @@ class HtmlParserTests(unittest.TestCase):
         root = z.parse_html('<p>x<br/>y<img src="1.png"/></p>')
         self.assertEqual([c.tag for c in root.children[0].children], [None, "br", None, "img"])
 
-
-# ------------------------------------------------------------ 转换器 -----
-
+# 转换器
 class RendererTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -410,9 +398,7 @@ class RendererTests(unittest.TestCase):
         self.assertIn("> 引用：", md)
         self.assertIn("> - 项", md)
 
-
-# -------------------------------------------------------------- 抓取 -----
-
+# 抓取
 class ClientTests(unittest.TestCase):
     def make_client(self, routes=None, fail_urls=()):
         http = FakeHttp(routes if routes is not None else default_routes(), fail_urls=fail_urls)
@@ -478,9 +464,7 @@ class ClientTests(unittest.TestCase):
         self.assertIn("简单说", doc.content_html)
         self.assertEqual(doc.question_title, "如何系统地学习 Rust 异步编程？")
 
-
-# -------------------------------------------------------------- 保存 -----
-
+# 保存
 class SaverTests(unittest.TestCase):
     def save(self, outdir, ref="p/" + ARTICLE_ID, routes=None, **kwargs):
         http = FakeHttp(routes if routes is not None else default_routes(), cookie="z_c0=x")
@@ -522,7 +506,7 @@ class SaverTests(unittest.TestCase):
                 if line.startswith("  -") or line == "tags:":
                     continue
                 key, _, value = line.partition(": ")
-                self.assertTrue(value.startswith('"') and value.endswith('"'), "不是合法 YAML：%r" % line)
+                self.assertTrue(value.startswith('"') and value.endswith('"'), "不是合法 YAML: %r" % line)
                 json.loads(value)  # 双引号字符串同时也是合法 JSON 字符串
             self.assertIn("created", " ".join(body))
 
@@ -603,9 +587,7 @@ class SaverTests(unittest.TestCase):
             result, _ = self.save(tmp, name_format_article="{id}-{author}")
             self.assertEqual(result.path.stem, "%s-张三" % ARTICLE_ID)
 
-
-# -------------------------------------------------------------- 命令行 -----
-
+# 命令行
 class CliTests(unittest.TestCase):
     def test_collect_refs_from_args_and_file(self):
         parser = z.build_parser()
@@ -654,7 +636,6 @@ class CliTests(unittest.TestCase):
                 self.assertIn("零成本抽象", files[0].read_text(encoding="utf-8"))
         finally:
             z.HttpClient = original  # type: ignore[assignment]
-
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
