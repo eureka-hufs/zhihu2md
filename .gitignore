@@ -1,0 +1,32 @@
+# 账号凭证 —— 千万别提交（泄露等于把知乎登录态交出去）
+cookie.txt
+*.cookie
+cookies.txt
+
+# 个人 / 运行期数据
+gui-settings.json
+gui-log.txt
+gui-error.log
+selftest-result.txt
+smoke-ui-result.txt
+zhihu-archive/
+samples/
+_debug/
+
+# 打包产物（exe 走 GitHub Releases，不进 git）
+dist/
+build/
+release/
+*.spec
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.testtmp/
+.pytmp/
+.pyi-cache/
+
+# 编辑器
+.vscode/
+.idea/

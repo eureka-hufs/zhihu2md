@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<title>如何系统地学习 Rust 异步编程？ - 知乎</title>
+</head>
+<body>
+<div id="root">
+  <h1 class="QuestionHeader-title">如何系统地学习 Rust 异步编程？</h1>
+  <div class="AnswerItem">
+    <div class="RichText ztext" options="[object Object]"><p>简单说，<strong>先读官方文档</strong>，然后动手写。</p>
+<p>我整理了三步：</p>
+<ol><li>把 <code>Future</code> 当成一个状态机来理解</li><li>搞清楚 <code>poll</code> 的唤醒机制</li><li>最后再碰 <code>Pin</code></li></ol>
+<p><img src="https://pic3.zhimg.com/v2-ccc_720w.jpg" data-original="https://pic3.zhimg.com/v2-ccc_r.jpg" alt="学习路线"/></p>
+<pre lang="cpp"><code><span class="kt">int</span> <span class="n">main</span>() {
+    <span class="k">return</span> <span class="mi">0</span>;
+}</code></pre>
+<p>更多细节见 <a href="https://zhuanlan.zhihu.com/p/2094715383932573257">我的专栏</a>。</p></div>
+  </div>
+</div>
+<script id="js-initialData" type="text/json">{"initialState": {"entities": {"answers": {"2024747872659285839": {"id": "2024747872659285839", "type": "answer", "content": "<p>简单说，<strong>先读官方文档</strong>，然后动手写。</p>\n<p>我整理了三步：</p>\n<ol><li>把 <code>Future</code> 当成一个状态机来理解</li><li>搞清楚 <code>poll</code> 的唤醒机制</li><li>最后再碰 <code>Pin</code></li></ol>\n<p><img src=\"https://pic3.zhimg.com/v2-ccc_720w.jpg\" data-original=\"https://pic3.zhimg.com/v2-ccc_r.jpg\" alt=\"学习路线\"/></p>\n<pre lang=\"cpp\"><code><span class=\"kt\">int</span> <span class=\"n\">main</span>() {\n    <span class=\"k\">return</span> <span class=\"mi\">0</span>;\n}</code></pre>\n<p>更多细节见 <a href=\"https://zhuanlan.zhihu.com/p/2094715383932573257\">我的专栏</a>。</p>", "question": {"id": "1914329673120347774", "title": "如何系统地学习 Rust 异步编程？"}, "author": {"id": "u-200", "name": "李四", "url_token": "lisi-7"}, "created_time": 1690000000, "updated_time": 1690005000, "voteup_count": 4321, "comment_count": 88}}, "questions": {"1914329673120347774": {"id": "1914329673120347774", "title": "如何系统地学习 Rust 异步编程？"}}, "users": {"u-200": {"name": "李四", "url_token": "lisi-7"}}}}}</script>
+</body>
+</html>

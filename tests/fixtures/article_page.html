@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<title>Rust 异步编程入门：从 Future 到 Pin - 知乎</title>
+<meta property="og:title" content="Rust 异步编程入门：从 Future 到 Pin"/>
+<meta name="author" content="张三"/>
+</head>
+<body>
+<div id="root">
+  <h1 class="Post-Title">Rust 异步编程入门：从 Future 到 Pin</h1>
+  <div class="Post-RichTextContainer">
+    <div class="RichText ztext Post-RichText css-1g0fqss" options="[object Object]"><h2>为什么需要异步</h2>
+<p>在 Rust 里，异步是一种<strong>零成本抽象</strong>：编译器把 <code>async fn</code> 展开成状态机。<br>但它并不「免费」，你得先理解 <code>Future</code> 和 <code>Pin</code>。例如判断 <code>argc &lt; 3</code> 这种写法在文中出现时不能被当成 HTML。</p>
+<p>行内公式：时间复杂度 <img class="eeimg" eeimg="1" src="https://www.zhihu.com/equation?tex=O(1)" alt="O(1)"/>，符号 <img class="eeimg" eeimg="1" src="https://www.zhihu.com/equation?tex=%5Calpha%2B%5Cbeta" alt="\alpha+\beta"/> 也不该丢。</p>
+<p>参考 <a href="https://link.zhihu.com/?target=https%3A%2F%2Frust-lang.org%2Fasync-book%2F" target="_blank">Async Book</a>，或者看 <a href="/question/123/answer/456">这个回答</a>。</p>
+<blockquote><p>不要过早优化。<br>—— Donald Knuth</p></blockquote>
+<figure data-size="normal"><noscript><img src="https://pic1.zhimg.com/v2-aaa_r.jpg" data-original="https://pic1.zhimg.com/v2-aaa_r.jpg"/></noscript><img src="data:image/svg+xml;utf8,&lt;svg/&gt;" data-rawwidth="1200" data-rawheight="800" data-original="https://pic1.zhimg.com/v2-aaa_r.jpg" class="origin_image zh-lightbox-thumb lazy" width="1200"/><figcaption>图 1：Future 的状态机</figcaption></figure>
+<p><img src="https://picx.zhimg.com/v2-bbb_720w.jpg" data-original="https://picx.zhimg.com/v2-bbb_r.gif" alt="动图演示" data-caption="动图演示"/></p>
+<h3>一段代码</h3>
+<pre lang="rust"><code><span class="k">async</span> <span class="k">fn</span> <span class="nf">main</span>() {
+    <span class="kd">let</span> x = <span class="mi">1</span> &lt; <span class="mi">2</span>;  <span class="c1">// &quot;注释&quot;</span>
+    println!(<span class="s">"{x}"</span>);
+}</code></pre>
+<div class="highlight"><pre lang="python"><code><span class="k">def</span> <span class="nf">add</span>(a, b):
+    <span class="k">return</span> a + b</code></pre></div>
+<p>然后是块级公式：</p>
+<p><img class="eeimg" eeimg="2" src="https://www.zhihu.com/equation?tex=%5Cint_0%5E1%20x%5E2%20%5C%2C%20dx%20%3D%20%5Cfrac%7B1%7D%7B3%7D" alt="\int_0^1 x^2 \, dx = \frac{1}{3}"/></p>
+<h3>列表与表格</h3>
+<ul><li>第一项</li><li>第二项<code>code</code><ul><li>嵌套一</li><li>嵌套二</li></ul></li></ul>
+<ol start="3"><li>从三开始</li><li>第四项</li></ol>
+<table><thead><tr><th>语言</th><th>特点</th></tr></thead><tbody><tr><td>Rust</td><td>内存安全 | 无 GC</td></tr><tr><td>C++</td><td>自由</td></tr></tbody></table>
+<hr>
+<p>上下标：H<sub>2</sub>O，E=mc<sup>2</sup>，删除线 <del>旧内容</del>，斜体 <em>强调</em>。</p></div>
+  </div>
+</div>
+<script id="js-initialData" type="text/json">{"initialState": {"entities": {"articles": {"2094715383932573257": {"id": "2094715383932573257", "type": "article", "title": "Rust 异步编程入门：从 Future 到 Pin", "content": "<h2>为什么需要异步</h2>\n<p>在 Rust 里，异步是一种<strong>零成本抽象</strong>：编译器把 <code>async fn</code> 展开成状态机。<br>但它并不「免费」，你得先理解 <code>Future</code> 和 <code>Pin</code>。例如判断 <code>argc &lt; 3</code> 这种写法在文中出现时不能被当成 HTML。</p>\n<p>行内公式：时间复杂度 <img class=\"eeimg\" eeimg=\"1\" src=\"https://www.zhihu.com/equation?tex=O(1)\" alt=\"O(1)\"/>，符号 <img class=\"eeimg\" eeimg=\"1\" src=\"https://www.zhihu.com/equation?tex=%5Calpha%2B%5Cbeta\" alt=\"\\alpha+\\beta\"/> 也不该丢。</p>\n<p>参考 <a href=\"https://link.zhihu.com/?target=https%3A%2F%2Frust-lang.org%2Fasync-book%2F\" target=\"_blank\">Async Book</a>，或者看 <a href=\"/question/123/answer/456\">这个回答</a>。</p>\n<blockquote><p>不要过早优化。<br>—— Donald Knuth</p></blockquote>\n<figure data-size=\"normal\"><noscript><img src=\"https://pic1.zhimg.com/v2-aaa_r.jpg\" data-original=\"https://pic1.zhimg.com/v2-aaa_r.jpg\"/></noscript><img src=\"data:image/svg+xml;utf8,&lt;svg/&gt;\" data-rawwidth=\"1200\" data-rawheight=\"800\" data-original=\"https://pic1.zhimg.com/v2-aaa_r.jpg\" class=\"origin_image zh-lightbox-thumb lazy\" width=\"1200\"/><figcaption>图 1：Future 的状态机</figcaption></figure>\n<p><img src=\"https://picx.zhimg.com/v2-bbb_720w.jpg\" data-original=\"https://picx.zhimg.com/v2-bbb_r.gif\" alt=\"动图演示\" data-caption=\"动图演示\"/></p>\n<h3>一段代码</h3>\n<pre lang=\"rust\"><code><span class=\"k\">async</span> <span class=\"k\">fn</span> <span class=\"nf\">main</span>() {\n    <span class=\"kd\">let</span> x = <span class=\"mi\">1</span> &lt; <span class=\"mi\">2</span>;  <span class=\"c1\">// &quot;注释&quot;</span>\n    println!(<span class=\"s\">\"{x}\"</span>);\n}</code></pre>\n<div class=\"highlight\"><pre lang=\"python\"><code><span class=\"k\">def</span> <span class=\"nf\">add</span>(a, b):\n    <span class=\"k\">return</span> a + b</code></pre></div>\n<p>然后是块级公式：</p>\n<p><img class=\"eeimg\" eeimg=\"2\" src=\"https://www.zhihu.com/equation?tex=%5Cint_0%5E1%20x%5E2%20%5C%2C%20dx%20%3D%20%5Cfrac%7B1%7D%7B3%7D\" alt=\"\\int_0^1 x^2 \\, dx = \\frac{1}{3}\"/></p>\n<h3>列表与表格</h3>\n<ul><li>第一项</li><li>第二项<code>code</code><ul><li>嵌套一</li><li>嵌套二</li></ul></li></ul>\n<ol start=\"3\"><li>从三开始</li><li>第四项</li></ol>\n<table><thead><tr><th>语言</th><th>特点</th></tr></thead><tbody><tr><td>Rust</td><td>内存安全 | 无 GC</td></tr><tr><td>C++</td><td>自由</td></tr></tbody></table>\n<hr>\n<p>上下标：H<sub>2</sub>O，E=mc<sup>2</sup>，删除线 <del>旧内容</del>，斜体 <em>强调</em>。</p>", "author": {"id": "u-100", "name": "张三", "url_token": "zhangsan-42"}, "created": 1700000000, "updated": 1700003600, "voteup_count": 1234, "comment_count": 56}}, "users": {"u-100": {"name": "张三", "url_token": "zhangsan-42"}}}}}</script>
+</body>
+</html>
