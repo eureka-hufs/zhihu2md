@@ -1,12 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""zhihu2md 的离线测试: 不联网, 用真实的页面结构快照跑通整条链路.
-
-运行：
-    python -m unittest discover -s tests -v
-    python tests/test_zhihu2md.py
-
-由 DeepSeek-v41-Flash 生成.
+"""zhihu2md 的离线测试
 """
 
 from __future__ import annotations
@@ -18,15 +12,15 @@ import re
 import shutil
 import sys
 import unittest
+import urllib.parse
 import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-import zhihu2md as z  # noqa: E402
+import zhihu2md as z
 
-# 工作区内的临时目录（系统 temp 目录在沙箱里可能不可写）
 TMP_ROOT = ROOT / ".testtmp"
 TMP_ROOT.mkdir(parents=True, exist_ok=True)
 
@@ -65,14 +59,14 @@ class FakeHttp:
         self.calls.append(url)
         for fragment in self.fail_urls:
             if fragment in url:
-                raise z.ZhihuError("模拟失败：%s" % url)
+                raise z.ZhihuError("模拟失败: %s" % url)
         for fragment, response in self.routes.items():
             if fragment in url:
                 return response
         if "zhimg.com" in url:
             is_gif = url.endswith(".gif")
             return 200, {"Content-Type": "image/gif" if is_gif else "image/png"}, GIF if is_gif else PNG
-        raise z.ZhihuError("测试里没有配置这个 URL:%s" % url)
+        raise z.ZhihuError("测试里没有配置这个 URL: %s" % url)
 
 def default_routes():
     return {
@@ -209,7 +203,7 @@ class UtilsTests(unittest.TestCase):
         self.assertEqual(z.normalize_cookie("z_c0=abc;"), "z_c0=abc")
 
     def test_normalize_cookie_from_curl_fragment_without_curl_word(self):
-        # 用户只复制了 cURL 的一部分...
+        # 用户只复制了 cURL 的一部分
         fragment = '-H ^"accept: */*^" -H ^"cookie: z_c0=AA; d_c0=BB^" --compressed'
         self.assertEqual(z.normalize_cookie(fragment), "z_c0=AA; d_c0=BB")
 
@@ -429,7 +423,7 @@ class ClientTests(unittest.TestCase):
         )
 
     def test_auto_kind_tries_article_then_answer(self):
-        # 只配回答页：请求文章页会失败，随后应自动按回答重试
+        # 只配回答页: 请求文章页会失败, 随后应自动按回答重试
         client, _ = self.make_client({"answer/" + ANSWER_ID: html_response(read_fixture("answer_page.html"))})
         doc = client.fetch(z.parse_ref(ANSWER_ID))
         self.assertEqual(doc.kind, "answer")
@@ -491,7 +485,7 @@ class SaverTests(unittest.TestCase):
             self.assertEqual(len(links), 2)
             for link in links:
                 self.assertNotIn(" ", link)
-                self.assertTrue((Path(tmp) / link).exists(), "图片没落地：%s" % link)
+                self.assertTrue((Path(tmp) / link).exists(), "图片没落地: %s" % link)
             self.assertTrue(links[0].endswith("img-001.png"))
             self.assertTrue(links[1].endswith("img-002.gif"))
 
@@ -636,6 +630,102 @@ class CliTests(unittest.TestCase):
                 self.assertIn("零成本抽象", files[0].read_text(encoding="utf-8"))
         finally:
             z.HttpClient = original  # type: ignore[assignment]
+
+# 公式的 URL 编码还原
+sys.path.insert(0, str(ROOT / "tools"))
+import fix_formula_plus as repair  # noqa: E402
+
+EQUATION_URL = "https://www.zhihu.com/equation?tex="
+
+def form_encode(tex: str) -> str:
+    """模拟知乎的 form-urlencoded：空格 -> '+'，字面加号 -> '%2B'。"""
+    return urllib.parse.quote(tex, safe="").replace("%20", "+")
+
+class FormulaEncodingTests(unittest.TestCase):
+    def render_img(self, src: str, attrs: str = 'eeimg="2"') -> str:
+        html = '<p><img class="eeimg" %s src="%s"/></p>' % (attrs, src)
+        return z.MarkdownRenderer().render(z.parse_html(html))
+
+    def test_form_encoded_spaces_restored(self):
+        tex = r"\frac{1}{G} R + \frac{1}{g^2} F^2"
+        md = self.render_img(EQUATION_URL + form_encode(tex))
+        self.assertIn(r"\frac{1}{G} R + \frac{1}{g^2} F^2", md)
+        self.assertNotIn("++", md)
+
+    def test_plus_runs_between_operands_kept_as_operator(self):
+        # 作者写 `R + \frac`, 若字面加号未转义, 编码后是连续的 3 个 '+'(1.1.1)
+        self.assertEqual(
+            z._expand_plus_runs(r"\frac{1}{G} R+++\frac{1}{g^2}"),
+            r"\frac{1}{G} R + \frac{1}{g^2}",
+        )
+        self.assertEqual(z._expand_plus_runs("a++b"), "a + b")
+        # 行首缩进的连续 '+' 是空格, 不是加号
+        self.assertEqual(z._expand_plus_runs("\\\\++++++++S"), "\\\\        S")
+
+    def test_literal_plus_not_eaten(self):
+        md = self.render_img(EQUATION_URL + form_encode(r"\alpha+\beta"), 'eeimg="1"')
+        self.assertIn(r"$\alpha+\beta$", md)
+
+    def test_structure_plus_becomes_space(self):
+        tex = r"\displaystyle\mathrm{d} \mathbf{B} = \frac{I\mathrm{d}\mathbf{l}\times \mathbf{r}}{\mathbf{r}^3}"
+        md = self.render_img(EQUATION_URL + form_encode(tex))
+        self.assertIn(r"\mathrm{d} \mathbf{B} = \frac", md)
+        self.assertNotIn("+", md.replace(r"\+", ""))
+
+    def test_align_star_converted_to_aligned(self):
+        tex = r"\begin{align*} S &= \int x \\ Z &= 1 \end{align*}"
+        md = self.render_img(EQUATION_URL + form_encode(tex))
+        self.assertIn(r"\begin{aligned}", md)
+        self.assertIn(r"\end{aligned}", md)
+        self.assertNotIn("align*", md)
+
+    def test_trailing_double_backslash_trimmed(self):
+        tex = r"\begin{align*} a &= b \\ \end{align*} \\"
+        md = self.render_img(EQUATION_URL + form_encode(tex))
+        body = md.split("$$")[1].strip()
+        self.assertFalse(body.endswith("\\\\"))
+
+    def test_alt_latex_preferred(self):
+        alt = r"\displaystyle\mathrm{d} \mathbf{B} = \frac{1}{r^3}"
+        raw = form_encode(r"\displaystyle\mathrm{d} \mathbf{B} = \frac{1}{r^3}")
+        html = ('<p><img class="eeimg" eeimg="2" alt="%s" '
+                'src="%s%s"/></p>') % (alt.replace('"', "&quot;"), EQUATION_URL, raw)
+        md = z.MarkdownRenderer().render(z.parse_html(html))
+        self.assertIn(r"\mathrm{d} \mathbf{B} = \frac{1}{r^3}", md)
+
+    def test_plain_text_plus_untouched(self):
+        # 普通公式 (不是 URL 编码的) 不该被动
+        md = self.render_img(EQUATION_URL + "a%2Bb", 'eeimg="1"')
+        self.assertIn("$a+b$", md)
+
+class RepairToolTests(unittest.TestCase):
+    def test_repair_block_inline_and_keep_code_fence(self):
+        broken = (
+            "# 标题\n\n"
+            "$$\n++\\begin{align*}+++++S+&=+\\int+\\mathrm{d}x+++\\frac{1}{G}+R\\end{align*}\n$$\n\n"
+            "行内：$\\nabla+\\cdot+\\mathbf{B}+=+0$\n\n"
+            "```\n$$ a+b $$\n```\n"
+        )
+        fixed, count = repair.repair_text(broken)
+        self.assertGreaterEqual(count, 2)
+        self.assertNotIn("++++", fixed)
+        self.assertIn(r"S &= \int \mathrm{d}x + \frac{1}{G} R", fixed.replace("  ", " "))
+        self.assertIn(r"\nabla \cdot \mathbf{B} = 0", fixed)
+        self.assertIn("$$ a+b $$", fixed)  # 代码块里的内容不动
+
+    def test_repair_is_idempotent(self):
+        broken = "$$\n\\mathrm{d}+\\mathbf{B}+=+\\frac{1}{r}\n$$\n"
+        once, count1 = repair.repair_text(broken)
+        self.assertGreaterEqual(count1, 1)
+        twice, count2 = repair.repair_text(once)
+        self.assertEqual(count2, 0)
+        self.assertEqual(once, twice)
+
+    def test_repair_leaves_clean_formula_alone(self):
+        clean = "$$\n\\frac{a}{b} + \\frac{c}{d}\n$$\n"
+        fixed, count = repair.repair_text(clean)
+        self.assertEqual(count, 0)
+        self.assertEqual(clean, fixed)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

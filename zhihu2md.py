@@ -34,7 +34,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -816,6 +816,96 @@ def _first(*values: Optional[str]) -> str:
             return value.strip()
     return ""
 
+# 1.1.1 update. 解决公式转换输出大量 + 号异常
+# 异常原因: 知乎 equation?tex= 用的是 form-urlencoded, 旧代码用 urllib.parse.unquote, space 变 + 号...
+_TEX_RAW_RE = re.compile(r"[?&]tex=([^&#]*)")
+_PLUS_RUN_RE = re.compile(r"\+\+")
+_PLUS_CMD_RE = re.compile(r"\+\\[A-Za-z]")
+_PLUS_STRUCT_RE = re.compile(r"[=&{}\[\]()]\+|\+[=&{}\[\]()]")
+_ALIGN_BEGIN_RE = re.compile(r"\\begin\{(?:align\*?|eqnarray\*?|gather\*?|split)\}")
+_ALIGN_END_RE = re.compile(r"\\end\{(?:align\*?|eqnarray\*?|gather\*?|split)\}")
+
+def plus_encoding_evidence(text: str) -> int:
+    r"""判断一段公式文本是否被"空格 -> '+'"编码过: 证据越多越像.
+    只看**紧贴**结构符号的加号 (`+\int`、`=+`、`+[`) 和连续加号,
+    所以已经修好的 ` + \frac`(两侧有空格的真加号) 不会被误判.
+    """
+    text = text or ""
+    return (3 * len(_PLUS_RUN_RE.findall(text))
+            + len(_PLUS_CMD_RE.findall(text))
+            + len(_PLUS_STRUCT_RE.findall(text)))
+
+def _expand_plus_runs(text: str) -> str:
+    """把 form-encoded 的 '+' 还原成空格, 同时保留真正的加号运算符.
+    知乎常见的编码是"空格 -> '+'", 而真正的加号有时也是裸 '+', 光看字面分不清.
+    经验规则 (1.1.1 update):
+      * 夹在两个"操作数"之间的 2~3 个连续 '+'  -> 一个加号运算符  ' + '
+      * 其余情况（挨着 & = { } ( ) [ ] \\ 等结构符号、或出现在行首缩进）-> 空格
+    """
+    out: List[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        if text[i] != "+":
+            out.append(text[i])
+            i += 1
+            continue
+        j = i
+        while j < n and text[j] == "+":
+            j += 1
+        run = j - i
+        left = text[i - 1] if i > 0 else ""
+        right = text[j] if j < n else ""
+        left_operand = bool(left) and (left.isalnum() or left in "})]")
+        right_operand = bool(right) and (right.isalnum() or right in "{([\\")
+        if 2 <= run <= 3 and left_operand and right_operand:
+            out.append(" + ")
+        else:
+            out.append(" " * run)
+        i = j
+    return "".join(out)
+
+def decode_tex_param(raw: str) -> str:
+    """解码知乎公式的 tex 参数.
+    知乎有两种编码方式, 必须区分, 否则公式会坏:
+      * form-urlencoded: 空格 -> '+'，字面加号 -> '%2B'（本参数常见这种）
+      * encodeURIComponent: 空格 -> '%20'，字面加号保持 '+'
+    直接 unquote 会把空格变成一堆字面加号; 直接 unquote_plus 又会吃掉
+    `a+b` 里的加号, 所以按证据判断, 并在必要时按"连续加号"还原空格与运算符.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return ""
+
+    if "%2b" in raw.lower():
+        # 有被转义的字面加号 -> 裸 '+' 只可能是空格
+        return urllib.parse.unquote(raw.replace("+", " "))
+
+    plain = urllib.parse.unquote(raw)
+    if "%20" in raw.lower() or " " in plain:
+        return plain
+    if "+" not in plain:
+        return plain
+
+    evidence = plus_encoding_evidence(plain)
+    if evidence >= 3:
+        return urllib.parse.unquote(_expand_plus_runs(raw))
+    return plain
+
+def looks_like_latex(text: str) -> bool:
+    """粗略判断一段文本是不是 LaTeX 源码 (而不是渲染后的普通文字)."""
+    text = text or ""
+    return "\\" in text and ("{" in text or "^" in text or "_" in text)
+
+def clean_math(tex: str, display: bool) -> str:
+    """合并多余空白; 整段公式里的 align* 等换成 MathJax/Obsidian 更稳的 aligned."""
+    tex = (tex or "").replace("\u00a0", " ").replace("\r", " ").replace("\n", " ")
+    tex = re.sub(r"[ \t]{2,}", " ", tex).strip()
+    if display:
+        tex = _ALIGN_BEGIN_RE.sub(lambda _m: "\\begin{aligned}", tex)
+        tex = _ALIGN_END_RE.sub(lambda _m: "\\end{aligned}", tex)
+        tex = re.sub(r"(?:\\\\)+\s*$", "", tex).strip()  # 去掉结尾多余的 \\
+    return tex
+
 class MarkdownRenderer:
     """把知乎的正文 HTML 转成 Obsidian / CommonMark 友好的 Markdown."""
     def __init__(self, base_url: str = "") -> None:
@@ -1054,20 +1144,26 @@ class MarkdownRenderer:
         src = node.get("src", "")
         if "equation" not in src and "data-tex" not in node.attrs:
             return None
-        tex = _first(node.get("data-tex"), node.get("data-formula"))
-        if not tex:
-            m = re.search(r"[?&]tex=([^&]*)$|[?&]tex=([^&]+)", src)
+        tex = ""
+        attr_tex = _first(node.get("data-tex"), node.get("data-formula"))
+        alt = _first(node.get("alt"))
+        if attr_tex:
+            tex = urllib.parse.unquote(attr_tex)
+        elif looks_like_latex(alt):
+            # alt 里存的是作者原文的 LaTeX，不经过 URL 编码，空格最可靠
+            tex = urllib.parse.unquote(alt)
+        else:
+            m = _TEX_RAW_RE.search(src)
             if m:
-                tex = urllib.parse.unquote(m.group(1) or m.group(2) or "")
-        if not tex:
-            tex = _first(node.get("alt"))
-        if not tex:
-            return None
-        tex = urllib.parse.unquote(tex).strip()
-        tex = tex.replace("\u00a0", " ")
+                tex = decode_tex_param(m.group(1))
+        if not tex and alt:
+            tex = urllib.parse.unquote(alt)
         if not tex:
             return None
         display = node.get("eeimg") == "2" or "\\begin{" in tex or "\\displaystyle" in tex
+        tex = clean_math(tex, display)
+        if not tex:
+            return None
         if display:
             return "\n$$\n%s\n$$\n" % tex
         return "$%s$" % tex
