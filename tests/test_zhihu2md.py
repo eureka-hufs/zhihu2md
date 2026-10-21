@@ -698,7 +698,7 @@ class FormulaEncodingTests(unittest.TestCase):
         md = self.render_img(EQUATION_URL + "a%2Bb", 'eeimg="1"')
         self.assertIn("$a+b$", md)
 
-    # 1.1.2 新增: 结尾 \\ 以及短公式
+    # 1.1.2 新增: 结尾 \\ 与短公式
     def test_inline_trailing_double_backslash_removed(self):
         # 结尾的 \\ 会把闭合 $ 转义掉, 必须去掉 (1.1.2)
         md = self.render_img(EQUATION_URL + "x%3D1%5C%5C", 'eeimg="1"')
@@ -818,6 +818,14 @@ class MathCommandTests(unittest.TestCase):
                          r"{\mathit{5\kern{9pt}}\cr\hline}")
         self.assertEqual(self.norm(r"\rm a & \rm b"), r"\mathrm{a}& \mathrm{b}")
 
+    def test_switch_scope_crossing_boxed_falls_back(self):
+        # 开关的作用域跨过 \boxed{} 时内容括号不平衡, 必须回退成只包下一个 token,
+        # 否则会多出一个 } 导致 MathJax 报 Extra close brace (1.1.3 回归)
+        src = r"\scr Y\text{-}a\ \boxed{\left\{\begin{array}{l}x\\y\end{array}\right.}"
+        out = self.norm(src)
+        self.assertTrue(z._balanced(out), out)
+        self.assertIn(r"\mathscr{Y}", out)
+
     def test_nested_switch_inside_wrapped_content(self):
         # 开关包住的内容里还有 \rm, 必须递归处理 (1.1.3 回归)
         self.assertEqual(self.norm(r"\scr O_{\rm I}"), r"\mathscr{O_{\mathrm{I}}}")
@@ -840,8 +848,41 @@ class MathCommandTests(unittest.TestCase):
         tex = r"\mathbf{A}+\boldsymbol{B}+x^2"
         self.assertEqual(self.norm(tex), tex)
 
+    def test_array_columns_expanded(self):
+        # 列声明 1 列但内容 3 列: MathJax 会报 Extra alignment tab (1.1.3)
+        src = r"\begin{array}{|c|} a & b & c \end{array}"
+        self.assertEqual(z.fix_array_columns(src), r"\begin{array}{|c|c|c|} a & b & c \end{array}")
+
+    def test_correct_array_untouched(self):
+        src = r"\begin{array}{|c|c|} a & b \end{array}"
+        self.assertEqual(z.fix_array_columns(src), src)
+
+    def test_nested_array_fixed_independently(self):
+        # 嵌套 array 各按自己的内容补列: 外层 2 列、内层 2 列(原声明 l 只有 1 列)
+        src = r"\begin{array}{|c|} a & \begin{array}{l} x & y \end{array} \end{array}"
+        self.assertEqual(z.fix_array_columns(src),
+                         r"\begin{array}{|c|c|} a & \begin{array}{cc} x & y \end{array} \end{array}")
+
+    def test_switch_scope_with_left_right_split_falls_back(self):
+        # 作用域在 & 处截断, 里面只有 \left 没有 \right —— 包装会破坏配对,
+        # 必须退化成只包下一个 token (1.1.3 回归)
+        src = r"\scr Y\left( a & b\right)"
+        self.assertTrue(z.delimiters_balanced(src))
+        out = self.norm(src)
+        self.assertTrue(z.delimiters_balanced(out), out)
+        self.assertIn(r"\mathscr{Y}", out)
+
+    def test_empty_tag_removed(self):
+        # 空的 \tag*{} 在 MathJax 下报错, 应直接去掉 (1.1.3)
+        self.assertEqual(z.strip_empty_tags(r"\begin{array}{c}a\end{array}\tag*{}"),
+                         r"\begin{array}{c}a\end{array}")
+        self.assertEqual(z.strip_empty_tags(r"x\tag{}"), r"x")
+        # 非空 tag 要保留
+        self.assertEqual(z.strip_empty_tags(r"x\tag{1.2}"), r"x\tag{1.2}")
+
 class ReferenceTests(unittest.TestCase):
     """1.1.3 新增: 参考文献角标 -> [N] + 文末 ## 参考."""
+
     def render(self, html: str) -> str:
         return z.MarkdownRenderer().render(z.parse_html(html))
 

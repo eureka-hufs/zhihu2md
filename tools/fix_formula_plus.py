@@ -53,6 +53,27 @@ def looks_like_math(text: str) -> bool:
     return "\\" in text or "^" in text or "_" in text or "=" in text
 
 _TRAILING_BREAK_RE = re.compile(r"\\+\s*$")
+# 旧版(1.1.3 迭代中期)的 bug 会把表格结构包进字体参数, 例如
+#   \mathit{6\kern{15pt}\cr\hline
+# 这种形态没法可靠反推, 只能提示用同名 .bak 恢复.
+# 判断必须"按花括号精确看内部": \mathbf{\text{x}} & ...\hline 是正常写法.
+_DAMAGE_WRAPPERS = ("mathit", "mathrm", "mathbf", "mathsf", "mathtt",
+                    "mathscr", "mathcal", "mathbb", "mathfrak", "boldsymbol")
+_DAMAGE_INNER_RE = re.compile(r"\\(?:cr|hline)\b")
+
+
+def find_damage(text: str) -> int:
+    """统计"字体参数内部包着表格结构"的可疑处数(旧版 bug 的痕迹)."""
+    count = 0
+    for m in re.finditer(r"\\(?:%s)\{" % "|".join(_DAMAGE_WRAPPERS), text or ""):
+        start = text.find("{", m.start())
+        end = core._match_brace(text, start)
+        if end < 0:
+            continue
+        inner = text[start + 1:end]
+        if _DAMAGE_INNER_RE.search(inner) or "&" in inner:
+            count += 1
+    return count
 
 def _tidy(body: str, display: bool, fix_plus: bool = True) -> str:
     """整理一段公式. fix_plus=False 时只处理结尾换行/空白, 不动加号.
@@ -66,6 +87,8 @@ def _tidy(body: str, display: bool, fix_plus: bool = True) -> str:
     body = body.replace("\\left [", "\\left[").replace("\\right ]", "\\right]")
     body = core.strip_trailing_breaks(body)   # 1.1.2: 两种模式都去掉结尾 \ / \\
     body = core.normalize_math_commands(body) # 1.1.3: \bold/\bm/\scr、\[ \] 归一化
+    body = core.fix_array_columns(body)       # 1.1.3: 补齐 array 列声明
+    body = core.strip_empty_tags(body)        # 1.1.3: 去掉空的 \tag*{}
     if display:
         body = ALIGN_BEGIN_RE.sub(lambda _m: "\\begin{aligned}", body)
         body = ALIGN_END_RE.sub(lambda _m: "\\end{aligned}", body)
@@ -81,7 +104,11 @@ def _needs_repair(body: str) -> tuple[bool, bool]:
     needs_plus = core.plus_repair_suspicion(text)
     # 1.1.3: \bold/\bm/\scr、外层 \[ \] 这类 Obsidian 不认的写法也要修
     needs_font = core.normalize_math_commands(text) != text
-    return (needs_tail or needs_plus or needs_font), needs_plus
+    # 1.1.3: array 列声明不足(KaTeX 容错、MathJax 报错)也要修
+    needs_array = core.fix_array_columns(text) != text
+    # 1.1.3: 空的 \tag*{} 在 MathJax 下会报错
+    needs_tag = core.strip_empty_tags(text) != text
+    return (needs_tail or needs_plus or needs_font or needs_array or needs_tag), needs_plus
 
 def repair_block(body: str) -> str:
     """修复一个 $$ 块 (含换行缩进): 不值得修就原样返回."""
@@ -131,6 +158,7 @@ def _repair_inline_in_text(text: str) -> tuple[str, int]:
 
 def repair_text(text: str) -> tuple[str, int]:
     """返回 (修复后的文本, 修复处数).
+
     1.1.3: 反复修到稳定 — 块级修复可能改变 $$ 的配对, 让下一轮才看得见新的
     行内公式; 循环到不再变化, 才能保证"再跑一遍是 0 处"(幂等).
     """
@@ -199,9 +227,15 @@ def main(argv=None) -> int:
         try:
             original = path.read_text(encoding="utf-8")
         except OSError as exc:
-            print("读取失败 %s: %s" % (path, exc))
+            print("读取失败 %s：%s" % (path, exc))
             continue
         fixed, count = repair_text(original)
+        # 1.1.3: 检测旧版 bug 留下的损坏痕迹(表格结构被包进字体参数).
+        # 这种形态没法可靠反推, 只能提示用同名 .bak 还原后重跑.
+        damage = find_damage(original)
+        if damage:
+            print("  ! %s 有 %d 处旧版 bug 的损坏痕迹(字体参数里包着 \\cr/\\hline/&), "
+                  "请先用同名 .bak 还原再重跑本工具" % (path, damage))
         if not count:
             continue
         changed_files += 1
@@ -214,7 +248,7 @@ def main(argv=None) -> int:
             backup.write_text(original, encoding="utf-8")
         path.write_text(fixed, encoding="utf-8")
         print("已修复 %s  ->  %d 处公式%s" % (
-            path, count, "" if args.no_backup else "(备份 %s)" % backup.name))
+            path, count, "" if args.no_backup else "（备份 %s）" % backup.name))
 
     print("\n扫描 %d 个文件, 修复 %d 个文件、共 %d 处公式%s" % (
         total_files, changed_files, total_formulas,

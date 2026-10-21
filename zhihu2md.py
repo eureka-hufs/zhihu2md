@@ -375,14 +375,12 @@ class Ref:
             return "https://www.zhihu.com/question/%s/answer/%s" % (self.question_id, self.target_id)
         return "https://www.zhihu.com/answer/%s" % self.target_id
 
-
 _ARTICLE_RE = re.compile(r"(?:^|/)p/(\d{1,20})")
 _QA_RE = re.compile(r"(?:^|/)question/(\d{1,20})/answer/(\d{1,20})")
 _ANSWER_RE = re.compile(r"(?:^|/)answer/(\d{1,20})")
 _DIGITS_RE = re.compile(r"^\d{5,}$")
 _DOMAIN_RE = re.compile(r"^(?:[a-z0-9-]+\.)*zhihu\.com/", re.I)
 _LINK_TARGET_RE = re.compile(r"[?&]target=([^&]+)")
-
 
 def _normalize_ref_text(raw: str) -> str:
     s = (raw or "").strip().strip("\"'<>()[]\u200b \t\r\n")
@@ -392,7 +390,6 @@ def _normalize_ref_text(raw: str) -> str:
     s = s.split("?")[0]
     s = _DOMAIN_RE.sub("", s, count=1)  # 去掉 zhuanlan.zhihu.com/ 之类的域名
     return s.strip("/")
-
 
 def parse_ref(text: str) -> Ref:
     """把用户给的编号 / 链接解析成 Ref.
@@ -997,6 +994,7 @@ def _match_brace(tex: str, start: int) -> int:
 _SCOPE_STOP_WORDS = {"cr", "hline", "end", "right", "middle", "tag", "label",
                      "over", "atop", "choose", "begin"}
 
+
 def _scope_end(tex: str, start: int) -> int:
     """从 start 往后找到"当前花括号层级结束"的位置(未配对的 '}'、结构符号、或末尾).
 
@@ -1033,7 +1031,6 @@ def _scope_end(tex: str, start: int) -> int:
 
 def normalize_math_commands(tex: str) -> str:
     r"""反复归一化, 直到内容不再变化.
-
     为什么需要循环: 开关型命令(如 \scr)会把"本组剩余内容"整体包进
     \mathscr{...}, 而被包进来的内容里可能还有 \rm/\it 等写法, 只处理一遍
     会漏掉它们. 循环到稳定为止(最多 8 轮, 正常 2 轮内收敛).
@@ -1045,6 +1042,44 @@ def normalize_math_commands(tex: str) -> str:
             break
         tex = new
     return tex
+
+_EMPTY_TAG_RE = re.compile(r"\\tag\*?\s*\{\s*\}")
+def strip_empty_tags(tex: str) -> str:
+    r"""1.1.3: 去掉空的 \tag*{} / \tag{}.
+
+    知乎作者常用 `\tag*{}` 占位(KaTeX 接受空参数), 但 MathJax 会报错,
+    整条公式变成源码. 空 tag 本身不显示任何内容, 删掉完全等价.
+    """
+    return _EMPTY_TAG_RE.sub("", tex or "")
+
+_LEFT_RE = re.compile(r"\\left(?![A-Za-z])")
+_RIGHT_RE = re.compile(r"\\right(?![A-Za-z])")
+def delimiters_balanced(tex: str) -> bool:
+    r"""\\left 与 \\right 是否成对.
+    MathJax/TeX 要求 \\left...\\right 在同一分组层级内配对, 如果包装时把
+    `}` 插在两者之间, 会报 "Extra \\left or missing \\right".
+    """
+    tex = tex or ""
+    return len(_LEFT_RE.findall(tex)) == len(_RIGHT_RE.findall(tex))
+
+def _balanced(tex: str) -> bool:
+    """花括号是否配平(跳过 \\{ \\} 这类转义)."""
+    depth = 0
+    i = 0
+    n = len(tex or "")
+    while i < n:
+        ch = tex[i]
+        if ch == "\\":
+            i += 2
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth < 0:
+                return False
+        i += 1
+    return depth == 0
 
 def _normalize_once(tex: str) -> str:
     r"""1.1.3 新增: 让公式在 Obsidian(MathJax) 也能渲染(单轮).
@@ -1091,9 +1126,32 @@ def _normalize_once(tex: str) -> str:
                 continue
             end = _scope_end(tex, k)
             inner = tex[k:end].strip()
-            if inner:
+            if inner and _balanced(inner) and delimiters_balanced(inner):
                 # 递归处理包进来的内容, 否则嵌套写法(如 \scr O_{\rm I})改不干净
                 out.append("\\%s{%s}" % (target, normalize_math_commands(inner)))
+                i = end
+                continue
+            if inner:
+                # 作用域跨过了 \boxed{} 之类的组, 内容括号不平衡 -> 包起来会坏,
+                # 退化成"只包下一个参数"的保守做法 (1.1.3 修复)
+                end = k
+            else:
+                end = end
+            # 回退: 只作用于下一个参数
+            if end < n and tex[end] == "{":
+                close = _match_brace(tex, end)
+                if close < 0:
+                    out.append(tex[i:])
+                    break
+                out.append("\\%s{%s}" % (target, tex[end + 1:close]))
+                i = close + 1
+                continue
+            m2 = re.match(r"\\[A-Za-z]+|[A-Za-z0-9]+", tex[end:]) if end < n else None
+            if m2:
+                out.append("\\%s{%s}" % (target, m2.group(0)))
+                i = end + len(m2.group(0))
+                continue
+            out.append("\\" + target)
             i = end
             continue
 
@@ -1138,6 +1196,101 @@ def _normalize_once(tex: str) -> str:
         i = cmd_end
     return "".join(out)
 
+_ARRAY_BEGIN = "\\begin{array}"
+_ARRAY_END = "\\end{array}"
+
+def _array_span(tex: str, start: int) -> int:
+    """从 start(指向 \\begin{array}) 找到配对的 \\end{array} 之后的下标, 找不到 -1."""
+    depth = 0
+    i = start
+    n = len(tex)
+    while i < n:
+        if tex.startswith(_ARRAY_BEGIN, i):
+            depth += 1
+            i += len(_ARRAY_BEGIN)
+            continue
+        if tex.startswith(_ARRAY_END, i):
+            depth -= 1
+            i += len(_ARRAY_END)
+            if depth == 0:
+                return i
+            continue
+        i += 1
+    return -1
+
+def _array_cells(body: str) -> int:
+    """数一个 array 里最多有几列: 顶层 & 的个数 + 1; 跳过花括号组和嵌套 array."""
+    brace = 0
+    cells = [1]
+    i, n = 0, len(body)
+    while i < n:
+        if body.startswith(_ARRAY_BEGIN, i):
+            end = _array_span(body, i)
+            i = end if end > 0 else n
+            continue
+        ch = body[i]
+        if ch == "\\":
+            if body.startswith("\\\\", i):
+                if brace == 0:
+                    cells.append(1)
+                i += 2
+                continue
+            if brace == 0 and re.match(r"\\cr\b", body[i:]):
+                cells.append(1)
+                i += 3
+                continue
+            i += 2 if i + 1 < n else 1
+            continue
+        if ch == "{":
+            brace += 1
+        elif ch == "}":
+            brace -= 1
+        elif ch == "&" and brace == 0:
+            cells[-1] += 1
+        i += 1
+    return max(cells)
+
+def _array_cols(spec: str) -> int:
+    """数列声明里有几列(支持 c/l/r 和 p{..}/m{..}/b{..})."""
+    spec = re.sub(r"[pmb]\{[^{}]*\}", "c", spec or "")
+    return len(re.findall(r"[clr]", spec))
+
+def fix_array_columns(tex: str) -> str:
+    """1.1.3: 补全 array 的列声明.
+    作者的 tex 常写成 `\\begin{array}{|c|}` 却放了 6 列内容 —— 知乎的 KaTeX
+    容错能渲染, Obsidian 的 MathJax 会直接报 "Extra alignment tab", 整条公式
+    显示成源码. 这里按实际列数把声明补成 `|c|c|c|c|c|c|`.
+    """
+    tex = tex or ""
+    out: List[str] = []
+    i = 0
+    while True:
+        j = tex.find(_ARRAY_BEGIN, i)
+        if j < 0:
+            out.append(tex[i:])
+            break
+        out.append(tex[i:j])
+        pos = j + len(_ARRAY_BEGIN)
+        m = re.match(r"\{([^{}]*)\}", tex[pos:])
+        if not m:
+            out.append(_ARRAY_BEGIN)
+            i = pos
+            continue
+        spec = m.group(1)
+        body_start = pos + m.end()
+        end = _array_span(tex, j)
+        if end < 0:
+            out.append(tex[j:])
+            break
+        body_end = tex.rfind(_ARRAY_END, body_start, end)
+        body = fix_array_columns(tex[body_start:body_end])
+        need = _array_cells(body)
+        if need > _array_cols(spec):
+            spec = ("|" + "|".join(["c"] * need) + "|") if "|" in spec else ("c" * need)
+        out.append("%s{%s}%s%s" % (_ARRAY_BEGIN, spec, body, _ARRAY_END))
+        i = end
+    return "".join(out)
+
 def clean_math(tex: str, display: bool) -> str:
     """合并多余空白; 整段公式里的 align* 等换成 MathJax/Obsidian 更稳的 aligned."""
     tex = (tex or "").replace("\u00a0", " ").replace("\r", " ").replace("\n", " ")
@@ -1145,6 +1298,9 @@ def clean_math(tex: str, display: bool) -> str:
     # 1.1.2 update: 结尾的 \ / \\ 行内公式也会残留, 统一在这里去掉
     tex = strip_trailing_breaks(tex)
     tex = normalize_math_commands(tex)   # 1.1.3: 字体命令/外层定界符归一化
+    tex = fix_array_columns(tex)         # 1.1.3: 补齐 array 列声明(KaTeX 能容错, MathJax 不行)
+    tex = strip_empty_tags(tex)          # 1.1.3: 去掉空的 \tag*{} (MathJax 不接受)
+    tex = tex.strip()
     if display:
         tex = _ALIGN_BEGIN_RE.sub(lambda _m: "\\begin{aligned}", tex)
         tex = _ALIGN_END_RE.sub(lambda _m: "\\end{aligned}", tex)
