@@ -974,7 +974,6 @@ _FONT_SWITCHES = {
 }
 _FONT_DROP_RE = re.compile(r"\\boldmath(?![A-Za-z])")
 
-
 def _match_brace(tex: str, start: int) -> int:
     """返回与 tex[start]=='{' 配对的 '}' 下标(处理 \\{ \\}); 找不到返回 -1."""
     depth = 0
@@ -993,16 +992,32 @@ def _match_brace(tex: str, start: int) -> int:
         i += 1
     return -1
 
-def _scope_end(tex: str, start: int) -> int:
-    """从 start 往后找到"当前花括号层级结束"的位置(未配对的 '}' 或字符串末尾).
+# 开关型命令的作用域遇到这些就停, 否则会把表格结构(\cr \hline & \\ \end)
+# 一起包进 \mathit{...} / \mathrm{...}, 让整个 array 渲染失败.
+_SCOPE_STOP_WORDS = {"cr", "hline", "end", "right", "middle", "tag", "label",
+                     "over", "atop", "choose", "begin"}
 
-    用来实现开关型命令(\\rm 等)的作用域: 它们作用于本组内剩余的内容.
+def _scope_end(tex: str, start: int) -> int:
+    """从 start 往后找到"当前花括号层级结束"的位置(未配对的 '}'、结构符号、或末尾).
+
+    用来实现开关型命令(\\rm 等)的作用域: 它们作用于本组内剩余的内容, 但遇到
+    `&`、`\\\\`、`\\cr`、`\\hline`、`\\end`、`\\right` 等结构符号必须停下,
+    否则会把表格/矩阵的结构吞进字体的参数里.
     """
     depth = 0
     i = start
-    while i < len(tex):
+    n = len(tex)
+    while i < n:
         ch = tex[i]
         if ch == "\\":
+            if i + 1 < n and tex[i + 1] == "\\":
+                return i                      # 换行符 \\ 是结构边界
+            m = re.match(r"\\([A-Za-z]+)", tex[i:])
+            if m:
+                if depth == 0 and m.group(1) in _SCOPE_STOP_WORDS:
+                    return i
+                i += len(m.group(0))
+                continue
             i += 2
             continue
         if ch == "{":
@@ -1011,11 +1026,14 @@ def _scope_end(tex: str, start: int) -> int:
             if depth == 0:
                 return i
             depth -= 1
+        elif ch == "&" and depth == 0:
+            return i
         i += 1
-    return len(tex)
+    return n
 
 def normalize_math_commands(tex: str) -> str:
     r"""反复归一化, 直到内容不再变化.
+
     为什么需要循环: 开关型命令(如 \scr)会把"本组剩余内容"整体包进
     \mathscr{...}, 而被包进来的内容里可能还有 \rm/\it 等写法, 只处理一遍
     会漏掉它们. 循环到稳定为止(最多 8 轮, 正常 2 轮内收敛).
@@ -1028,9 +1046,9 @@ def normalize_math_commands(tex: str) -> str:
         tex = new
     return tex
 
-
 def _normalize_once(tex: str) -> str:
     r"""1.1.3 新增: 让公式在 Obsidian(MathJax) 也能渲染(单轮).
+
     1) 去掉外层定界符 \[ \] \( \): 作者常在 tex 里写 `\[ g=... \]`,
        导出成 `$\[...\]$` 后 MathJax 把它当公式定界符 -> 报错.
        只删"独立"的定界符: `\left[`、`\\[2pt]` 这类前面是反斜杠, 不动.
@@ -1151,6 +1169,7 @@ class MarkdownRenderer:
     # 1.1.3: 参考文献
     def _attach_references(self, text: str) -> str:
         """补上"参考文献"小节.
+
         两种情况:
           * 正文里作者本来写了 "[1] 作者. 标题." 这样的条目 -> 只在前面补 "## 参考" 标题
           * 正文里没有条目, 但角标带链接(data-url / <a href>) -> 按 "[1] 链接" 生成列表

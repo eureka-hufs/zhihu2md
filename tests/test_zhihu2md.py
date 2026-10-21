@@ -698,7 +698,7 @@ class FormulaEncodingTests(unittest.TestCase):
         md = self.render_img(EQUATION_URL + "a%2Bb", 'eeimg="1"')
         self.assertIn("$a+b$", md)
 
-    # 1.1.2 新增: 结尾 \\ 与短公式
+    # 1.1.2 新增: 结尾 \\ 以及短公式
     def test_inline_trailing_double_backslash_removed(self):
         # 结尾的 \\ 会把闭合 $ 转义掉, 必须去掉 (1.1.2)
         md = self.render_img(EQUATION_URL + "x%3D1%5C%5C", 'eeimg="1"')
@@ -747,7 +747,6 @@ class RepairToolTests(unittest.TestCase):
         self.assertEqual(count, 0)
         self.assertEqual(clean, fixed)
 
-    # 1.1.2 新增: 结尾 \\ 以及短公式 / 行内换行
     def test_repair_trailing_backslash_keeps_real_plus(self):
         # 只删结尾 \\, 不能把 a+b 的加号吃掉 (1.1.2)
         broken = "行内 $a+b\\\\$ 结束\n"
@@ -799,12 +798,12 @@ class MathCommandTests(unittest.TestCase):
         self.assertEqual(self.norm(r"\Bbb R"), r"\mathbb{R}")
 
     def test_switch_applies_to_rest_of_group(self):
-        # \rm 是开关, 作用于本组剩余内容, 不能只包下一个 token (1.1.3)
+        # \rm 是开关, 作用于本组剩余内容, 不能只包下一个 token (1.1.3 回归)
         src = r"{\rm \kern{1em} MID\_SHORT\kern{1em}}"
         self.assertEqual(self.norm(src), r"{\mathrm{\kern{1em} MID\_SHORT\kern{1em}}}")
 
     def test_macro_with_command_argument(self):
-        # 参数型宏后面跟控制序列时, 要连它的括号参数一起包 (1.1.3)
+        # 参数型宏后面跟控制序列时, 要连它的括号参数一起包 (1.1.3 回归)
         self.assertEqual(self.norm(r"\bold \kern{1em}"), r"\mathbf{\kern{1em}}")
 
     def test_kern_argument_never_orphaned(self):
@@ -812,6 +811,12 @@ class MathCommandTests(unittest.TestCase):
         out = self.norm(src)
         self.assertNotIn(r"\kern}", out)
         self.assertIn(r"\mathrm{\kern{4em} LONG\kern{4em}}", out)
+
+    def test_scope_stops_at_table_structure(self):
+        # 开关不能把 \cr \hline & \\ 吞进字体参数 (1.1.3 回归)
+        self.assertEqual(self.norm(r"{\it 5\kern{9pt}\cr\hline}"),
+                         r"{\mathit{5\kern{9pt}}\cr\hline}")
+        self.assertEqual(self.norm(r"\rm a & \rm b"), r"\mathrm{a}& \mathrm{b}")
 
     def test_nested_switch_inside_wrapped_content(self):
         # 开关包住的内容里还有 \rm, 必须递归处理 (1.1.3 回归)

@@ -42,6 +42,7 @@ ALIGN_END_RE = re.compile(r"\\end\{(?:align\*?|eqnarray\*?|gather\*?|split)\}")
 def looks_like_math(text: str) -> bool:
     """行内 $...$ 里必须是公式, 别把两个公式之间的中文当成公式.
     中文允许出现在 `\\text{...}` 这类命令里.
+
     1.1.2 update: 不再要求公式里必须有 '+'. 因为"只残留结尾 \\"的公式
     (例如 $x=1\\\\$) 也需要修, 旧版本会因为不含 '+' 直接跳过.
     """
@@ -55,6 +56,7 @@ _TRAILING_BREAK_RE = re.compile(r"\\+\s*$")
 
 def _tidy(body: str, display: bool, fix_plus: bool = True) -> str:
     """整理一段公式. fix_plus=False 时只处理结尾换行/空白, 不动加号.
+
     1.1.2 update: 必须区分两种修复, 否则"只删结尾 \\"时会顺手把
     `a+b` 的加号当成空格吃掉.
     """
@@ -149,6 +151,7 @@ def _repair_text_once(text: str) -> tuple[str, int]:
         return "\x00FENCE%d\x00" % (len(fences) - 1)
 
     protected = FENCE_RE.sub(hide, text)
+
     blocks = 0
 
     def repl_block(match: "re.Match[str]") -> str:
@@ -211,7 +214,7 @@ def main(argv=None) -> int:
             backup.write_text(original, encoding="utf-8")
         path.write_text(fixed, encoding="utf-8")
         print("已修复 %s  ->  %d 处公式%s" % (
-            path, count, "" if args.no_backup else " (备份 %s) " % backup.name))
+            path, count, "" if args.no_backup else "(备份 %s)" % backup.name))
 
     print("\n扫描 %d 个文件, 修复 %d 个文件、共 %d 处公式%s" % (
         total_files, changed_files, total_formulas,
