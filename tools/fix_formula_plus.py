@@ -42,34 +42,54 @@ ALIGN_END_RE = re.compile(r"\\end\{(?:align\*?|eqnarray\*?|gather\*?|split)\}")
 def looks_like_math(text: str) -> bool:
     """行内 $...$ 里必须是公式, 别把两个公式之间的中文当成公式.
     中文允许出现在 `\\text{...}` 这类命令里.
+    1.1.2 update: 不再要求公式里必须有 '+'. 因为"只残留结尾 \\"的公式
+    (例如 $x=1\\\\$) 也需要修, 旧版本会因为不含 '+' 直接跳过.
     """
     text = text or ""
     probe = _TEX_WORD_RE.sub("", text)
     if _CJK_RE.search(probe):
         return False
-    return "+" in text and ("\\" in text or "^" in text or "_" in text or "=" in text)
+    return "\\" in text or "^" in text or "_" in text or "=" in text
 
-def _tidy(body: str, display: bool) -> str:
-    body = core._expand_plus_runs(body)
+_TRAILING_BREAK_RE = re.compile(r"\\+\s*$")
+
+def _tidy(body: str, display: bool, fix_plus: bool = True) -> str:
+    """整理一段公式. fix_plus=False 时只处理结尾换行/空白, 不动加号.
+    1.1.2 update: 必须区分两种修复, 否则"只删结尾 \\"时会顺手把
+    `a+b` 的加号当成空格吃掉.
+    """
+    if fix_plus:
+        body = core._expand_plus_runs(body)
     body = re.sub(r"[ \t]{2,}", " ", body)
     body = body.replace("\\left [", "\\left[").replace("\\right ]", "\\right]")
+    body = core.strip_trailing_breaks(body)   # 1.1.2: 两种模式都去掉结尾 \ / \\
     if display:
         body = ALIGN_BEGIN_RE.sub(lambda _m: "\\begin{aligned}", body)
         body = ALIGN_END_RE.sub(lambda _m: "\\end{aligned}", body)
-        body = re.sub(r"(?:\\\\)+\s*$", "", body).strip()
         return "\n" + body + "\n"
-    return body.strip()
+    return body
+
+def _needs_repair(body: str) -> tuple[bool, bool]:
+    """返回 (要不要处理, 要不要连加号一起修)."""
+    text = (body or "").strip()
+    if not text:
+        return False, False
+    needs_tail = bool(_TRAILING_BREAK_RE.search(text))
+    needs_plus = core.plus_repair_suspicion(text)
+    return (needs_tail or needs_plus), needs_plus
 
 def repair_block(body: str) -> str:
     """修复一个 $$ 块 (含换行缩进): 不值得修就原样返回."""
-    if core.plus_encoding_evidence(body) < 3:
+    needs, fix_plus = _needs_repair(body)
+    if not needs:
         return body
-    return _tidy(body, display=True)
+    return _tidy(body, display=True, fix_plus=fix_plus)
 
 def repair_inline(body: str) -> str:
-    if core.plus_encoding_evidence(body) < 3:
+    needs, fix_plus = _needs_repair(body)
+    if not needs:
         return body
-    return _tidy(body, display=False)
+    return _tidy(body, display=False, fix_plus=fix_plus)
 
 def _repair_inline_in_text(text: str) -> tuple[str, int]:
     """处理整段普通文本里的行内公式, 跳过反引号代码."""
@@ -90,10 +110,14 @@ def _repair_inline_in_text(text: str) -> tuple[str, int]:
                 if not looks_like_math(body):
                     return match.group(0)
                 fixed = repair_inline(body)
-                if fixed != body:
-                    count += 1
-                    return "$" + fixed + "$"
-                return match.group(0)
+                has_linebreak = "\\\\" in fixed
+                if fixed == body and not has_linebreak:
+                    return match.group(0)
+                count += 1
+                if has_linebreak:
+                    # 1.1.2: 行内 $...$ 里不能有换行符, 改成整段公式
+                    return "$$\n" + core.strip_trailing_breaks(fixed).strip() + "\n$$"
+                return "$" + fixed + "$"
 
             out.append(INLINE_MATH_RE.sub(repl, piece))
         return "".join(out)

@@ -698,6 +698,25 @@ class FormulaEncodingTests(unittest.TestCase):
         md = self.render_img(EQUATION_URL + "a%2Bb", 'eeimg="1"')
         self.assertIn("$a+b$", md)
 
+    # 1.1.2 update: 结尾\\错误识别
+    def test_inline_trailing_double_backslash_removed(self):
+        # 结尾的 \\ 会把闭合 $ 转义掉, 必须去掉 (1.1.2)
+        md = self.render_img(EQUATION_URL + "x%3D1%5C%5C", 'eeimg="1"')
+        self.assertIn("$x=1$", md)
+        self.assertNotIn("\\\\$", md)
+
+    def test_formula_with_internal_linebreak_promoted_to_display(self):
+        # 行内 $...$ 不能放换行符, 含 \\ 时必须升级为整段 (1.1.2)
+        md = self.render_img(EQUATION_URL + "a%3D1%5C%5Cb%3D2", 'eeimg="1"')
+        self.assertIn("$$", md)
+
+    def test_short_formula_plus_suspicion(self):
+        # 短公式例子 `\delta+S+=+0` 只有 2 个强证据, 旧阈值 3 会漏 (1.1.2)
+        self.assertTrue(z.plus_repair_suspicion(r"\delta+S+=+0"))
+        self.assertFalse(z.plus_repair_suspicion(r"a+b"))
+        self.assertFalse(z.plus_repair_suspicion(r"(a)+b"))
+        self.assertFalse(z.plus_repair_suspicion(r"x = y + z"))
+
 class RepairToolTests(unittest.TestCase):
     def test_repair_block_inline_and_keep_code_fence(self):
         broken = (
@@ -726,6 +745,37 @@ class RepairToolTests(unittest.TestCase):
         fixed, count = repair.repair_text(clean)
         self.assertEqual(count, 0)
         self.assertEqual(clean, fixed)
+
+    # 结尾 \\ 与行内换行 (1.1.2)
+    def test_repair_trailing_backslash_keeps_real_plus(self):
+        # 只删结尾 \\, 不能把 a+b 的加号吃掉 (1.1.2)
+        broken = "行内 $a+b\\\\$ 结束\n"
+        fixed, count = repair.repair_text(broken)
+        self.assertEqual(count, 1)
+        self.assertIn("$a+b$", fixed)
+
+    def test_repair_short_inline_plus(self):
+        # 短公式 += 漏修问题 (1.1.2)
+        broken = "经典物理遵循 $\\delta+S+=+0$ 原理\n"
+        fixed, count = repair.repair_text(broken)
+        self.assertEqual(count, 1)
+        self.assertIn(r"$\delta S = 0$", fixed)
+
+    def test_repair_inline_with_linebreak_becomes_display(self):
+        # 行内公式含 \\ 时自动改成整段 (1.1.2)
+        broken = "张量 $\\mathbf{T} = a \\\\ b$ 结束\n"
+        fixed, count = repair.repair_text(broken)
+        self.assertEqual(count, 1)
+        self.assertIn("$$\n", fixed)
+        self.assertNotIn("$\\mathbf{T} = a \\\\ b$", fixed)
+
+    def test_repair_trailing_backslash_idempotent(self):
+        broken = "$\\nabla \\cdot \\mathbf{B} = 0\\\\$\n"
+        once, count1 = repair.repair_text(broken)
+        self.assertEqual(count1, 1)
+        twice, count2 = repair.repair_text(once)
+        self.assertEqual(count2, 0)
+        self.assertEqual(once, twice)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

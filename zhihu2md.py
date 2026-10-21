@@ -34,7 +34,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
-__version__ = "1.1.1"
+__version__ = "1.1.2"
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -342,13 +342,12 @@ class _TreeBuilder(HTMLParser):
     def unknown_decl(self, data: str) -> None:
         return
 
-
 def parse_html(text: str) -> Node:
     builder = _TreeBuilder()
     try:
         builder.feed(text or "")
         builder.close()
-    except Exception:  # 解析器在极端畸形 HTML 下可能抛错，保留已解析部分
+    except Exception:  # 解析器在极端畸形 HTML 下可能抛错, 保留已解析部分
         pass
     return builder.root
 
@@ -393,7 +392,6 @@ def _normalize_ref_text(raw: str) -> str:
     s = _DOMAIN_RE.sub("", s, count=1)  # 去掉 zhuanlan.zhihu.com/ 之类的域名
     return s.strip("/")
 
-
 def parse_ref(text: str) -> Ref:
     """把用户给的编号 / 链接解析成 Ref.
     支持: p/123、question/1/answer/2、answer/2、纯数字,
@@ -427,7 +425,7 @@ def parse_ref(text: str) -> Ref:
     raise ZhihuError(
         "看不懂这个编号: %r\n"
         "  支持: p/2094715383932573257、question/1914329673120347774/answer/2024747872659285839、\n"
-        "        answer/2024747872659285839，或者完整链接" % raw
+        "        answer/2024747872659285839, 或者完整链接" % raw
     )
 
 # 页面数据提取
@@ -662,7 +660,7 @@ class HttpClient:
         extra_headers: Optional[Dict[str, str]] = None,
         allow_status: Sequence[int] = (),
     ) -> Tuple[int, Dict[str, str], bytes]:
-        """GET 一个 URL，返回 (状态码, 响应头, 响应体)。失败会重试。"""
+        """GET 一个 URL, 返回 (状态码, 响应头, 响应体). 失败会重试."""
         opener = self._opener()
         last_err: Optional[BaseException] = None
         for attempt in range(1, self.retries + 1):
@@ -822,6 +820,13 @@ _TEX_RAW_RE = re.compile(r"[?&]tex=([^&#]*)")
 _PLUS_RUN_RE = re.compile(r"\+\+")
 _PLUS_CMD_RE = re.compile(r"\+\\[A-Za-z]")
 _PLUS_STRUCT_RE = re.compile(r"[=&{}\[\]()]\+|\+[=&{}\[\]()]")
+# 1.1.2 update: 更严格的"强证据" —— 加号与结构符号**紧贴**才计数
+# (已经修好的 ` + \frac` 两侧有空格, 不会命中). 两个方向分开数,
+# 否则一个 `+=` 会把后面的 `=+` 一起吃掉, 导致短公式漏判.
+_STRONG_PLUS_BEFORE_RE = re.compile(r"[=&{}()\[\],;:]\+")
+_STRONG_PLUS_AFTER_RE = re.compile(r"\+[=&{}()\[\],;:]")
+# 加号紧贴关系符/尖括号: 正常数学里极少见, 命中即可判定为编码残留
+_PLUS_RELATION_RE = re.compile(r"\+[=&<>]|[=&<>]\+")
 _ALIGN_BEGIN_RE = re.compile(r"\\begin\{(?:align\*?|eqnarray\*?|gather\*?|split)\}")
 _ALIGN_END_RE = re.compile(r"\\end\{(?:align\*?|eqnarray\*?|gather\*?|split)\}")
 
@@ -834,6 +839,32 @@ def plus_encoding_evidence(text: str) -> int:
     return (3 * len(_PLUS_RUN_RE.findall(text))
             + len(_PLUS_CMD_RE.findall(text))
             + len(_PLUS_STRUCT_RE.findall(text)))
+
+def strong_plus_count(text: str) -> int:
+    """数"加号紧贴结构符号"的次数 (两个方向分别统计, 不会互相吃掉)."""
+    text = text or ""
+    return (len(_STRONG_PLUS_BEFORE_RE.findall(text))
+            + len(_STRONG_PLUS_AFTER_RE.findall(text)))
+
+def plus_repair_suspicion(text: str) -> bool:
+    """判断公式里的 '+' 是否可能是"空格被编码"的结果.
+
+    三级判断, 从强到弱:
+      1. 出现 `++`: 连续加号几乎不可能是运算;
+      2. 出现 `+=`、`=+`、`+<` 这类紧贴关系符/尖括号的组合: 正常数学里极少见;
+      3. 加号紧贴括号/花括号之处 >= 2.
+    正常的 `a+b`、`(a)+b`、`x = +b` 都不会命中.
+    """
+    text = text or ""
+    if "+" not in text:
+        return False
+    if "++" in text:
+        return True
+    if _PLUS_RELATION_RE.search(text):
+        return True
+    if strong_plus_count(text) >= 2:
+        return True
+    return plus_encoding_evidence(text) >= 3
 
 def _expand_plus_runs(text: str) -> str:
     """把 form-encoded 的 '+' 还原成空格, 同时保留真正的加号运算符.
@@ -887,7 +918,9 @@ def decode_tex_param(raw: str) -> str:
         return plain
 
     evidence = plus_encoding_evidence(plain)
-    if evidence >= 3:
+    # 1.1.2 update: 短公式(如 `\delta+S+=+0`) 证据只有 1~2 个, 旧阈值 3 会漏修,
+    # 改用 plus_repair_suspicion 做三级判定; 长公式仍按 evidence >= 3 兜底.
+    if plus_repair_suspicion(plain) or evidence >= 3:
         return urllib.parse.unquote(_expand_plus_runs(raw))
     return plain
 
@@ -896,14 +929,29 @@ def looks_like_latex(text: str) -> bool:
     text = text or ""
     return "\\" in text and ("{" in text or "^" in text or "_" in text)
 
+def strip_trailing_breaks(tex: str) -> str:
+    r"""1.1.2 新增: 去掉公式结尾的 `\` 或 `\\`.
+    知乎 tex 参数(尤其整段公式)常以换行符 `\\` 结尾; 留在 `$...$` 里会把
+    闭合的 `$` 转义掉 -> Obsidian 整条公式渲染失败, 显示成原始文本.
+    行内公式和整段公式都要处理, 所以单独抽出来.
+    """
+    tex = (tex or "").strip()
+    while tex:
+        stripped = re.sub(r"[\\\s]+$", "", tex).strip()
+        if stripped == tex:
+            break
+        tex = stripped
+    return tex
+
 def clean_math(tex: str, display: bool) -> str:
     """合并多余空白; 整段公式里的 align* 等换成 MathJax/Obsidian 更稳的 aligned."""
     tex = (tex or "").replace("\u00a0", " ").replace("\r", " ").replace("\n", " ")
     tex = re.sub(r"[ \t]{2,}", " ", tex).strip()
+    # 1.1.2 update: 结尾的 \ / \\ 行内公式也会残留, 统一在这里去掉
+    tex = strip_trailing_breaks(tex)
     if display:
         tex = _ALIGN_BEGIN_RE.sub(lambda _m: "\\begin{aligned}", tex)
         tex = _ALIGN_END_RE.sub(lambda _m: "\\end{aligned}", tex)
-        tex = re.sub(r"(?:\\\\)+\s*$", "", tex).strip()  # 去掉结尾多余的 \\
     return tex
 
 class MarkdownRenderer:
@@ -1160,7 +1208,13 @@ class MarkdownRenderer:
             tex = urllib.parse.unquote(alt)
         if not tex:
             return None
+        # 1.1.2 update: 先去掉结尾的 \ 或 \\, 再判断"是否整段公式".
+        # 顺序反了的话 `x=1\\` 会被当成"含换行的整段公式"而变成 $$ 块.
+        tex = strip_trailing_breaks(tex)
         display = node.get("eeimg") == "2" or "\\begin{" in tex or "\\displaystyle" in tex
+        if "\\\\" in tex:
+            # 1.1.2 update: 带换行符的公式放进行内 $...$ 会渲染失败, 改当整段公式
+            display = True
         tex = clean_math(tex, display)
         if not tex:
             return None
@@ -1917,7 +1971,6 @@ def build_header(doc: Document) -> str:
     title = squash_ws(doc.display_title).replace("\n", " ").strip() or "知乎内容"
     quote = "\n".join("> " + row for row in rows)
     return "# %s\n\n%s" % (title, quote)
-
 
 # 命令行
 def read_cookie_file(path: Path) -> str:
