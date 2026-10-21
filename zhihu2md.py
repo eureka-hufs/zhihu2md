@@ -954,9 +954,14 @@ def strip_trailing_breaks(tex: str) -> str:
 
 # 1.1.3 update: 字体命令归一化. 知乎的 KaTeX 认 \bold/\bm/\scr 等写法,
 # 但 Obsidian 用的 MathJax 不认(整条公式会报错), 统一换成两边都支持的命令.
-_FONT_CMDS = {
+# 分两类, 语义不同, 不能一律按"下一个 token"处理:
+#   * 参数型(宏): \bold{x} / \bold x 只作用于一个参数
+#   * 开关型: \rm / \bf / \scr ... 作用于"当前花括号内后面的全部内容"
+_FONT_ARGS = {
     "bold": "mathbf",
     "bm": "boldsymbol",
+}
+_FONT_SWITCHES = {
     "bf": "mathbf",
     "Bbb": "mathbb",
     "scr": "mathscr",
@@ -968,6 +973,7 @@ _FONT_CMDS = {
     "tt": "mathtt",
 }
 _FONT_DROP_RE = re.compile(r"\\boldmath(?![A-Za-z])")
+
 
 def _match_brace(tex: str, start: int) -> int:
     """返回与 tex[start]=='{' 配对的 '}' 下标(处理 \\{ \\}); 找不到返回 -1."""
@@ -987,14 +993,49 @@ def _match_brace(tex: str, start: int) -> int:
         i += 1
     return -1
 
+def _scope_end(tex: str, start: int) -> int:
+    """从 start 往后找到"当前花括号层级结束"的位置(未配对的 '}' 或字符串末尾).
+
+    用来实现开关型命令(\\rm 等)的作用域: 它们作用于本组内剩余的内容.
+    """
+    depth = 0
+    i = start
+    while i < len(tex):
+        ch = tex[i]
+        if ch == "\\":
+            i += 2
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            if depth == 0:
+                return i
+            depth -= 1
+        i += 1
+    return len(tex)
+
 def normalize_math_commands(tex: str) -> str:
-    r"""1.1.3 新增: 让公式在 Obsidian(MathJax) 也能渲染.
+    r"""反复归一化, 直到内容不再变化.
+    为什么需要循环: 开关型命令(如 \scr)会把"本组剩余内容"整体包进
+    \mathscr{...}, 而被包进来的内容里可能还有 \rm/\it 等写法, 只处理一遍
+    会漏掉它们. 循环到稳定为止(最多 8 轮, 正常 2 轮内收敛).
+    """
+    tex = tex or ""
+    for _ in range(8):
+        new = _normalize_once(tex)
+        if new == tex:
+            break
+        tex = new
+    return tex
+
+
+def _normalize_once(tex: str) -> str:
+    r"""1.1.3 新增: 让公式在 Obsidian(MathJax) 也能渲染(单轮).
     1) 去掉外层定界符 \[ \] \( \): 作者常在 tex 里写 `\[ g=... \]`,
        导出成 `$\[...\]$` 后 MathJax 把它当公式定界符 -> 报错.
        只删"独立"的定界符: `\left[`、`\\[2pt]` 这类前面是反斜杠, 不动.
-    2) 字体命令: \bold/\bm/\bf -> \mathbf/\boldsymbol,
-       \scr -> \mathscr, \cal -> \mathcal, \Bbb -> \mathbb,
-       \frak -> \mathfrak, \it/\rm/\sf/\tt -> \mathit/\mathrm/\mathsf/\mathtt;
+    2) 字体命令: \bold/\bm 是宏(作用于下一个参数), \rm/\bf/\scr/\cal/\Bbb/\frak/
+       \it/\sf/\tt 是开关(作用于本组内剩余内容), 分别按语义转换;
        \boldmath 是模式开关, 直接去掉.
     """
     tex = tex or ""
@@ -1016,12 +1057,35 @@ def normalize_math_commands(tex: str) -> str:
             out.append(tex[i])
             i += 1
             continue
-        target = _FONT_CMDS.get(m.group(1))
+        name = m.group(1)
+        cmd_end = i + len(m.group(0))
+
+        # 开关型: 作用于本组内剩余内容
+        target = _FONT_SWITCHES.get(name)
+        if target:
+            k = cmd_end
+            while k < n and tex[k] in " \t":
+                k += 1
+            if k >= n or tex[k] == "}":
+                # 后面没有内容: 保留一个等价的空命令, 别把结构弄坏
+                out.append("\\" + target)
+                i = k
+                continue
+            end = _scope_end(tex, k)
+            inner = tex[k:end].strip()
+            if inner:
+                # 递归处理包进来的内容, 否则嵌套写法(如 \scr O_{\rm I})改不干净
+                out.append("\\%s{%s}" % (target, normalize_math_commands(inner)))
+            i = end
+            continue
+
+        # 参数型宏: 只作用于下一个参数(花括号组 / 控制序列+其参数 / 单个词)
+        target = _FONT_ARGS.get(name)
         if not target:
             out.append(m.group(0))
-            i += len(m.group(0))
+            i = cmd_end
             continue
-        k = i + len(m.group(0))
+        k = cmd_end
         while k < n and tex[k] in " \t":
             k += 1
         if k < n and tex[k] == "{":
@@ -1029,16 +1093,31 @@ def normalize_math_commands(tex: str) -> str:
             if end < 0:
                 out.append(tex[i:])
                 break
-            out.append("\\%s{%s}" % (target, tex[k + 1:end]))
+            out.append("\\%s{%s}" % (target, normalize_math_commands(tex[k + 1:end])))
             i = end + 1
             continue
         token = re.match(r"\\[A-Za-z]+|[A-Za-z0-9]+", tex[k:]) if k < n else None
         if token:
-            out.append("\\%s{%s}" % (target, token.group(0)))
-            i = k + len(token.group(0))
+            end = k + len(token.group(0))
+            if token.group(0).startswith("\\"):
+                # 例如 \bold \kern{1em}: 把命令的括号参数一起包进来,
+                # 否则会得到 \mathbf{\kern}{1em} -> MathJax 报错
+                while True:
+                    p = end
+                    while p < n and tex[p] in " \t":
+                        p += 1
+                    if p < n and tex[p] == "{":
+                        close = _match_brace(tex, p)
+                        if close < 0:
+                            break
+                        end = close + 1
+                        continue
+                    break
+            out.append("\\%s{%s}" % (target, tex[k:end]))
+            i = end
             continue
         out.append("\\" + target)
-        i = i + len(m.group(0))
+        i = cmd_end
     return "".join(out)
 
 def clean_math(tex: str, display: bool) -> str:
@@ -1572,7 +1651,7 @@ class ZhihuClient:
             try:
                 return self._fetch_via_api(ref)
             except ZhihuError as api_error:
-                raise ZhihuError("%s\n  (备用 v4 API 也失败了: %s) "
+                raise ZhihuError("%s\n  （备用 v4 API 也失败了: %s）"
                                  % (page_error, str(api_error).splitlines()[0])) from None
 
     # 方式一: 解析页面内嵌 JSON
@@ -2130,6 +2209,7 @@ def build_header(doc: Document) -> str:
     quote = "\n".join("> " + row for row in rows)
     return "# %s\n\n%s" % (title, quote)
 
+
 # 命令行
 def read_cookie_file(path: Path) -> str:
     try:
@@ -2378,7 +2458,7 @@ Cookie 也可以放在 ./cookie.txt、~/.zhihu2md-cookie,
 _EMBED_REF_RE = re.compile(r"question/\d+/answer/\d+|/answer/\d+|/p/\d+|answer/\d+|p/\d+")
 
 def _collect_refs(args: argparse.Namespace) -> Tuple[List[Ref], List[Tuple[str, str]]]:
-    """收集要抓的编号, 返回 (有效的 Ref 列表, 无法识别的行).
+    """收集要抓的编号，返回 (有效的 Ref 列表, 无法识别的行).
     除了「一行一个编号」, 也能直接喂一整段从收藏夹/网页里复制出来的文字:
     识别不出来时会把行内出现的链接都抠出来.
     """
@@ -2436,7 +2516,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         warn(str(exc))
         return 2
     for line, reason in bad:
-        warn("跳过一行 (%s) : %s" % (reason, line))
+        warn("跳过一行（%s）：%s" % (reason, line))
     if not refs:
         if not bad:
             parser.print_help()
@@ -2468,7 +2548,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         outdir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
-        warn("无法创建输出目录 %s: %s" % (outdir, exc))
+        warn("无法创建输出目录 %s：%s" % (outdir, exc))
         return 2
 
     http = HttpClient(cookie=cookie, timeout=args.timeout, retries=args.retries, proxy=args.proxy)

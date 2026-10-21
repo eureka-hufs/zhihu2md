@@ -747,9 +747,9 @@ class RepairToolTests(unittest.TestCase):
         self.assertEqual(count, 0)
         self.assertEqual(clean, fixed)
 
-    # 1.1.2 新增: 结尾 \\ 以及短公式
+    # 1.1.2 新增: 结尾 \\ 以及短公式 / 行内换行
     def test_repair_trailing_backslash_keeps_real_plus(self):
-        # 只删结尾 \\, 不能把 a+b 的加号吃掉
+        # 只删结尾 \\, 不能把 a+b 的加号吃掉 (1.1.2)
         broken = "行内 $a+b\\\\$ 结束\n"
         fixed, count = repair.repair_text(broken)
         self.assertEqual(count, 1)
@@ -780,7 +780,6 @@ class RepairToolTests(unittest.TestCase):
 
 class MathCommandTests(unittest.TestCase):
     """1.1.3 新增: 字体命令归一化 + 外层定界符剥离."""
-
     def norm(self, tex: str) -> str:
         return z.normalize_math_commands(tex)
 
@@ -798,6 +797,29 @@ class MathCommandTests(unittest.TestCase):
     def test_legacy_switches_mapped(self):
         self.assertEqual(self.norm(r"{\bf x}"), r"{\mathbf{x}}")
         self.assertEqual(self.norm(r"\Bbb R"), r"\mathbb{R}")
+
+    def test_switch_applies_to_rest_of_group(self):
+        # \rm 是开关, 作用于本组剩余内容, 不能只包下一个 token (1.1.3)
+        src = r"{\rm \kern{1em} MID\_SHORT\kern{1em}}"
+        self.assertEqual(self.norm(src), r"{\mathrm{\kern{1em} MID\_SHORT\kern{1em}}}")
+
+    def test_macro_with_command_argument(self):
+        # 参数型宏后面跟控制序列时, 要连它的括号参数一起包 (1.1.3)
+        self.assertEqual(self.norm(r"\bold \kern{1em}"), r"\mathbf{\kern{1em}}")
+
+    def test_kern_argument_never_orphaned(self):
+        src = r"{\rm \kern{4em} LONG\kern{4em}}"
+        out = self.norm(src)
+        self.assertNotIn(r"\kern}", out)
+        self.assertIn(r"\mathrm{\kern{4em} LONG\kern{4em}}", out)
+
+    def test_nested_switch_inside_wrapped_content(self):
+        # 开关包住的内容里还有 \rm, 必须递归处理 (1.1.3 回归)
+        self.assertEqual(self.norm(r"\scr O_{\rm I}"), r"\mathscr{O_{\mathrm{I}}}")
+
+    def test_cjk_inside_tag_group_is_math(self):
+        # \tag{中文} 里的中文不应导致"这不是公式"的误判
+        self.assertTrue(repair.looks_like_math(r"\bf \color{Lavender}{\tag*{佐蔵　瑾}}"))
 
     def test_display_delimiters_stripped(self):
         out = self.norm(r"\[g=\text{diag}\left( 1,-1,-1,-1 \right)\]")

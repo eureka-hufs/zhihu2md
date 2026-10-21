@@ -31,9 +31,9 @@ import zhihu2md as core  # noqa: E402
 MATH_BLOCK_RE = re.compile(r"\$\$(.+?)\$\$", re.S)
 INLINE_MATH_RE = re.compile(r"(?<!\$)\$(?!\$)([^$\n]{1,300}?)\$(?!\$)")
 _CJK_RE = re.compile(r"[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]")
-# 公式里允许出现中文, 只要它在 \text{...} 这类命令里
+# 公式里允许出现中文, 只要它在 \text{...} / \tag{...} 这类命令里
 _TEX_WORD_RE = re.compile(
-    r"\\(?:text|textrm|textbf|textit|textsf|texttt|mathrm|operatorname|mbox|hbox)\{[^{}]*\}"
+    r"\\(?:text|textrm|textbf|textit|textsf|texttt|mathrm|operatorname|mbox|hbox|tag)\*?\{[^{}]*\}"
 )
 FENCE_RE = re.compile(r"^[ \t]*```[^\n]*\n.*?\n[ \t]*```[ \t]*$", re.S | re.M)
 ALIGN_BEGIN_RE = re.compile(r"\\begin\{(?:align\*?|eqnarray\*?|gather\*?|split)\}")
@@ -42,7 +42,6 @@ ALIGN_END_RE = re.compile(r"\\end\{(?:align\*?|eqnarray\*?|gather\*?|split)\}")
 def looks_like_math(text: str) -> bool:
     """行内 $...$ 里必须是公式, 别把两个公式之间的中文当成公式.
     中文允许出现在 `\\text{...}` 这类命令里.
-
     1.1.2 update: 不再要求公式里必须有 '+'. 因为"只残留结尾 \\"的公式
     (例如 $x=1\\\\$) 也需要修, 旧版本会因为不含 '+' 直接跳过.
     """
@@ -56,7 +55,6 @@ _TRAILING_BREAK_RE = re.compile(r"\\+\s*$")
 
 def _tidy(body: str, display: bool, fix_plus: bool = True) -> str:
     """整理一段公式. fix_plus=False 时只处理结尾换行/空白, 不动加号.
-
     1.1.2 update: 必须区分两种修复, 否则"只删结尾 \\"时会顺手把
     `a+b` 的加号当成空格吃掉.
     """
@@ -130,6 +128,20 @@ def _repair_inline_in_text(text: str) -> tuple[str, int]:
     return "\n".join(fix_line(line) for line in text.split("\n")), count
 
 def repair_text(text: str) -> tuple[str, int]:
+    """返回 (修复后的文本, 修复处数).
+    1.1.3: 反复修到稳定 — 块级修复可能改变 $$ 的配对, 让下一轮才看得见新的
+    行内公式; 循环到不再变化, 才能保证"再跑一遍是 0 处"(幂等).
+    """
+    total = 0
+    for _ in range(5):
+        new, count = _repair_text_once(text)
+        total += count
+        if new == text:
+            break
+        text = new
+    return text, total
+
+def _repair_text_once(text: str) -> tuple[str, int]:
     fences: list[str] = []
 
     def hide(match: "re.Match[str]") -> str:
@@ -184,7 +196,7 @@ def main(argv=None) -> int:
         try:
             original = path.read_text(encoding="utf-8")
         except OSError as exc:
-            print("读取失败 %s：%s" % (path, exc))
+            print("读取失败 %s: %s" % (path, exc))
             continue
         fixed, count = repair_text(original)
         if not count:
