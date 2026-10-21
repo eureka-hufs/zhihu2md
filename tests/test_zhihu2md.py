@@ -698,7 +698,7 @@ class FormulaEncodingTests(unittest.TestCase):
         md = self.render_img(EQUATION_URL + "a%2Bb", 'eeimg="1"')
         self.assertIn("$a+b$", md)
 
-    # 1.1.2 update: 结尾\\错误识别
+    # 1.1.2 新增: 结尾 \\ 与短公式
     def test_inline_trailing_double_backslash_removed(self):
         # 结尾的 \\ 会把闭合 $ 转义掉, 必须去掉 (1.1.2)
         md = self.render_img(EQUATION_URL + "x%3D1%5C%5C", 'eeimg="1"')
@@ -711,8 +711,9 @@ class FormulaEncodingTests(unittest.TestCase):
         self.assertIn("$$", md)
 
     def test_short_formula_plus_suspicion(self):
-        # 短公式例子 `\delta+S+=+0` 只有 2 个强证据, 旧阈值 3 会漏 (1.1.2)
+        # 短公式 `\delta+S+=+0` 只有 2 个强证据, 旧阈值 3 会漏 (1.1.2)
         self.assertTrue(z.plus_repair_suspicion(r"\delta+S+=+0"))
+        # 正常写法不能被误判
         self.assertFalse(z.plus_repair_suspicion(r"a+b"))
         self.assertFalse(z.plus_repair_suspicion(r"(a)+b"))
         self.assertFalse(z.plus_repair_suspicion(r"x = y + z"))
@@ -746,9 +747,9 @@ class RepairToolTests(unittest.TestCase):
         self.assertEqual(count, 0)
         self.assertEqual(clean, fixed)
 
-    # 结尾 \\ 与行内换行 (1.1.2)
+    # 1.1.2 新增: 结尾 \\ 以及短公式
     def test_repair_trailing_backslash_keeps_real_plus(self):
-        # 只删结尾 \\, 不能把 a+b 的加号吃掉 (1.1.2)
+        # 只删结尾 \\, 不能把 a+b 的加号吃掉
         broken = "行内 $a+b\\\\$ 结束\n"
         fixed, count = repair.repair_text(broken)
         self.assertEqual(count, 1)
@@ -776,6 +777,84 @@ class RepairToolTests(unittest.TestCase):
         twice, count2 = repair.repair_text(once)
         self.assertEqual(count2, 0)
         self.assertEqual(once, twice)
+
+class MathCommandTests(unittest.TestCase):
+    """1.1.3 新增: 字体命令归一化 + 外层定界符剥离."""
+
+    def norm(self, tex: str) -> str:
+        return z.normalize_math_commands(tex)
+
+    def test_bold_to_mathbf(self):
+        self.assertEqual(self.norm(r"\bold CP"), r"\mathbf{CP}")
+        self.assertEqual(self.norm(r"\bold{Citation}"), r"\mathbf{Citation}")
+
+    def test_bm_to_boldsymbol(self):
+        self.assertEqual(self.norm(r"\bm x"), r"\boldsymbol{x}")
+        self.assertEqual(self.norm(r"\bm{g}"), r"\boldsymbol{g}")
+
+    def test_scr_to_mathscr(self):
+        self.assertEqual(self.norm(r"\scr H"), r"\mathscr{H}")
+
+    def test_legacy_switches_mapped(self):
+        self.assertEqual(self.norm(r"{\bf x}"), r"{\mathbf{x}}")
+        self.assertEqual(self.norm(r"\Bbb R"), r"\mathbb{R}")
+
+    def test_display_delimiters_stripped(self):
+        out = self.norm(r"\[g=\text{diag}\left( 1,-1,-1,-1 \right)\]")
+        self.assertNotIn(r"\[", out)
+        self.assertNotIn(r"\]", out)
+        self.assertIn(r"\text{diag}", out)
+
+    def test_real_brackets_untouched(self):
+        tex = r"\left[ x \right] + a[1] + b\\[2pt] c"
+        self.assertEqual(self.norm(tex), tex)
+
+    def test_supported_commands_untouched(self):
+        tex = r"\mathbf{A}+\boldsymbol{B}+x^2"
+        self.assertEqual(self.norm(tex), tex)
+
+class ReferenceTests(unittest.TestCase):
+    """1.1.3 新增: 参考文献角标 -> [N] + 文末 ## 参考."""
+    def render(self, html: str) -> str:
+        return z.MarkdownRenderer().render(z.parse_html(html))
+
+    def test_sup_citation_becomes_bracket(self):
+        md = self.render("<p>应该<sup>[1]</sup>定义成能量密度。</p>")
+        self.assertIn("应该[1]定义成", md)
+        self.assertNotIn("<sup>", md)
+
+    def test_normal_superscript_kept(self):
+        md = self.render("<p>E=mc<sup>2</sup></p>")
+        self.assertIn("<sup>2</sup>", md)
+
+    def test_reference_urls_appended(self):
+        md = self.render('<p>引用<sup data-url="https://example.com/a">[1]</sup>。</p>')
+        self.assertIn("[1]", md)
+        self.assertIn("## 参考", md)
+        self.assertIn("- [1] https://example.com/a", md)
+
+    def test_existing_entries_get_heading(self):
+        md = self.render("<p>正文<sup>[1]</sup>。</p><p>[1] 作者. 标题.</p>")
+        self.assertIn("## 参考", md)
+        self.assertIn("[1] 作者. 标题.", md)
+
+    def test_no_citation_no_section(self):
+        md = self.render("<p>没有引用。</p>")
+        self.assertNotIn("## 参考", md)
+
+    def test_repair_bold_and_bracket_delims(self):
+        # 1.1.3: \bold -> \mathbf, \[ \] 外层定界符去掉
+        broken = "公式 $\\bold CP$ 和 $\\[g=\\text{diag}(1,-1)\\]$ 结束\n"
+        fixed, count = repair.repair_text(broken)
+        self.assertEqual(count, 2)
+        self.assertIn(r"$\mathbf{CP}$", fixed)
+        self.assertIn(r"$g=\text{diag}(1,-1)$", fixed)
+
+    def test_repair_keeps_left_bracket(self):
+        clean = "$\\left[ x \\right] + a[1]$\n"
+        fixed, count = repair.repair_text(clean)
+        self.assertEqual(count, 0)
+        self.assertEqual(clean, fixed)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

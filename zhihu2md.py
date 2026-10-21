@@ -34,7 +34,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
-__version__ = "1.1.2"
+__version__ = "1.1.3"
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -342,12 +342,13 @@ class _TreeBuilder(HTMLParser):
     def unknown_decl(self, data: str) -> None:
         return
 
+
 def parse_html(text: str) -> Node:
     builder = _TreeBuilder()
     try:
         builder.feed(text or "")
         builder.close()
-    except Exception:  # 解析器在极端畸形 HTML 下可能抛错, 保留已解析部分
+    except Exception:  # 解析器在极端畸形 HTML 下可能抛错，保留已解析部分
         pass
     return builder.root
 
@@ -392,6 +393,7 @@ def _normalize_ref_text(raw: str) -> str:
     s = _DOMAIN_RE.sub("", s, count=1)  # 去掉 zhuanlan.zhihu.com/ 之类的域名
     return s.strip("/")
 
+
 def parse_ref(text: str) -> Ref:
     """把用户给的编号 / 链接解析成 Ref.
     支持: p/123、question/1/answer/2、answer/2、纯数字,
@@ -425,7 +427,7 @@ def parse_ref(text: str) -> Ref:
     raise ZhihuError(
         "看不懂这个编号: %r\n"
         "  支持: p/2094715383932573257、question/1914329673120347774/answer/2024747872659285839、\n"
-        "        answer/2024747872659285839, 或者完整链接" % raw
+        "        answer/2024747872659285839，或者完整链接" % raw
     )
 
 # 页面数据提取
@@ -660,7 +662,7 @@ class HttpClient:
         extra_headers: Optional[Dict[str, str]] = None,
         allow_status: Sequence[int] = (),
     ) -> Tuple[int, Dict[str, str], bytes]:
-        """GET 一个 URL, 返回 (状态码, 响应头, 响应体). 失败会重试."""
+        """GET 一个 URL，返回 (状态码, 响应头, 响应体)。失败会重试。"""
         opener = self._opener()
         last_err: Optional[BaseException] = None
         for attempt in range(1, self.retries + 1):
@@ -829,6 +831,12 @@ _STRONG_PLUS_AFTER_RE = re.compile(r"\+[=&{}()\[\],;:]")
 _PLUS_RELATION_RE = re.compile(r"\+[=&<>]|[=&<>]\+")
 _ALIGN_BEGIN_RE = re.compile(r"\\begin\{(?:align\*?|eqnarray\*?|gather\*?|split)\}")
 _ALIGN_END_RE = re.compile(r"\\end\{(?:align\*?|eqnarray\*?|gather\*?|split)\}")
+# 1.1.3 update: 参考文献角标. 知乎的引用写成 <sup>[1]</sup> 或 <sup>[1](url)</sup>,
+# 普通上标(如 mc<sup>2</sup>)则只有数字, 两者要区分.
+_REF_SUP_RE = re.compile(r"^[\[［](\d{1,3})[\]］]$")
+_REF_LINK_RE = re.compile(r"^[\[［](\d{1,3})[\]］]\(([^)]*)\)$")
+# 正文里作者手写的参考条目: 行首 "[1] 作者. 标题."
+_REF_ENTRY_LINE_RE = re.compile(r"^\[(\d{1,3})\]\s+\S", re.M)
 
 def plus_encoding_evidence(text: str) -> int:
     r"""判断一段公式文本是否被"空格 -> '+'"编码过: 证据越多越像.
@@ -918,7 +926,7 @@ def decode_tex_param(raw: str) -> str:
         return plain
 
     evidence = plus_encoding_evidence(plain)
-    # 1.1.2 update: 短公式(如 `\delta+S+=+0`) 证据只有 1~2 个, 旧阈值 3 会漏修,
+    # 1.1.2 update: 短公式(如 `\delta+S+=+0`)证据只有 1~2 个, 旧阈值 3 会漏修,
     # 改用 plus_repair_suspicion 做三级判定; 长公式仍按 evidence >= 3 兜底.
     if plus_repair_suspicion(plain) or evidence >= 3:
         return urllib.parse.unquote(_expand_plus_runs(raw))
@@ -931,6 +939,7 @@ def looks_like_latex(text: str) -> bool:
 
 def strip_trailing_breaks(tex: str) -> str:
     r"""1.1.2 新增: 去掉公式结尾的 `\` 或 `\\`.
+
     知乎 tex 参数(尤其整段公式)常以换行符 `\\` 结尾; 留在 `$...$` 里会把
     闭合的 `$` 转义掉 -> Obsidian 整条公式渲染失败, 显示成原始文本.
     行内公式和整段公式都要处理, 所以单独抽出来.
@@ -943,12 +952,102 @@ def strip_trailing_breaks(tex: str) -> str:
         tex = stripped
     return tex
 
+# 1.1.3 update: 字体命令归一化. 知乎的 KaTeX 认 \bold/\bm/\scr 等写法,
+# 但 Obsidian 用的 MathJax 不认(整条公式会报错), 统一换成两边都支持的命令.
+_FONT_CMDS = {
+    "bold": "mathbf",
+    "bm": "boldsymbol",
+    "bf": "mathbf",
+    "Bbb": "mathbb",
+    "scr": "mathscr",
+    "cal": "mathcal",
+    "frak": "mathfrak",
+    "it": "mathit",
+    "rm": "mathrm",
+    "sf": "mathsf",
+    "tt": "mathtt",
+}
+_FONT_DROP_RE = re.compile(r"\\boldmath(?![A-Za-z])")
+
+def _match_brace(tex: str, start: int) -> int:
+    """返回与 tex[start]=='{' 配对的 '}' 下标(处理 \\{ \\}); 找不到返回 -1."""
+    depth = 0
+    i = start
+    while i < len(tex):
+        ch = tex[i]
+        if ch == "\\":
+            i += 2
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return -1
+
+def normalize_math_commands(tex: str) -> str:
+    r"""1.1.3 新增: 让公式在 Obsidian(MathJax) 也能渲染.
+    1) 去掉外层定界符 \[ \] \( \): 作者常在 tex 里写 `\[ g=... \]`,
+       导出成 `$\[...\]$` 后 MathJax 把它当公式定界符 -> 报错.
+       只删"独立"的定界符: `\left[`、`\\[2pt]` 这类前面是反斜杠, 不动.
+    2) 字体命令: \bold/\bm/\bf -> \mathbf/\boldsymbol,
+       \scr -> \mathscr, \cal -> \mathcal, \Bbb -> \mathbb,
+       \frak -> \mathfrak, \it/\rm/\sf/\tt -> \mathit/\mathrm/\mathsf/\mathtt;
+       \boldmath 是模式开关, 直接去掉.
+    """
+    tex = tex or ""
+    tex = re.sub(r"(?<!\\)\\\[", "", tex)
+    tex = re.sub(r"(?<!\\)\\\]", "", tex)
+    tex = re.sub(r"(?<!\\)\\\(", "", tex)
+    tex = re.sub(r"(?<!\\)\\\)", "", tex)
+    tex = _FONT_DROP_RE.sub("", tex)
+
+    out: List[str] = []
+    i, n = 0, len(tex)
+    while i < n:
+        if tex[i] != "\\":
+            out.append(tex[i])
+            i += 1
+            continue
+        m = re.match(r"\\([A-Za-z]+)", tex[i:])
+        if not m:
+            out.append(tex[i])
+            i += 1
+            continue
+        target = _FONT_CMDS.get(m.group(1))
+        if not target:
+            out.append(m.group(0))
+            i += len(m.group(0))
+            continue
+        k = i + len(m.group(0))
+        while k < n and tex[k] in " \t":
+            k += 1
+        if k < n and tex[k] == "{":
+            end = _match_brace(tex, k)
+            if end < 0:
+                out.append(tex[i:])
+                break
+            out.append("\\%s{%s}" % (target, tex[k + 1:end]))
+            i = end + 1
+            continue
+        token = re.match(r"\\[A-Za-z]+|[A-Za-z0-9]+", tex[k:]) if k < n else None
+        if token:
+            out.append("\\%s{%s}" % (target, token.group(0)))
+            i = k + len(token.group(0))
+            continue
+        out.append("\\" + target)
+        i = i + len(m.group(0))
+    return "".join(out)
+
 def clean_math(tex: str, display: bool) -> str:
     """合并多余空白; 整段公式里的 align* 等换成 MathJax/Obsidian 更稳的 aligned."""
     tex = (tex or "").replace("\u00a0", " ").replace("\r", " ").replace("\n", " ")
     tex = re.sub(r"[ \t]{2,}", " ", tex).strip()
     # 1.1.2 update: 结尾的 \ / \\ 行内公式也会残留, 统一在这里去掉
     tex = strip_trailing_breaks(tex)
+    tex = normalize_math_commands(tex)   # 1.1.3: 字体命令/外层定界符归一化
     if display:
         tex = _ALIGN_BEGIN_RE.sub(lambda _m: "\\begin{aligned}", tex)
         tex = _ALIGN_END_RE.sub(lambda _m: "\\end{aligned}", tex)
@@ -960,13 +1059,52 @@ class MarkdownRenderer:
         self.base_url = base_url or ZHIHU_HOME
         self.images: List[ImageRef] = []
         self.warnings: List[str] = []
+        self.citations: List[Tuple[str, str]] = []   # 1.1.3: (编号, 链接) 引用角标
 
     # 对外入口
     def render(self, node: Node) -> str:
         blocks = self._blocks(node)
         text = "\n\n".join(b for b in blocks if b.strip())
         text = re.sub(r"\n{3,}", "\n\n", text)
-        return text.strip() + "\n"
+        text = self._attach_references(text.strip())
+        return text + "\n"
+
+    # 1.1.3: 参考文献
+    def _attach_references(self, text: str) -> str:
+        """补上"参考文献"小节.
+        两种情况:
+          * 正文里作者本来写了 "[1] 作者. 标题." 这样的条目 -> 只在前面补 "## 参考" 标题
+          * 正文里没有条目, 但角标带链接(data-url / <a href>) -> 按 "[1] 链接" 生成列表
+        没有角标也没有条目时原样返回.
+        """
+        have = set(_REF_ENTRY_LINE_RE.findall(text))
+        missing: List[Tuple[str, str]] = []
+        seen = set()
+        for num, url in self.citations:
+            # 1.1.3: 只给"有链接"的角标生成条目; 没链接又没原文条目的,
+            # 硬造一个"(未给出来源)"反而污染笔记, 不如只保留文中的 [N]
+            if not url or num in have or num in seen:
+                continue
+            seen.add(num)
+            missing.append((num, url))
+        missing.sort(key=lambda item: int(item[0]))
+
+        lines = text.split("\n")
+        entry_lines = [i for i, line in enumerate(lines) if _REF_ENTRY_LINE_RE.match(line)]
+        if entry_lines:
+            first = entry_lines[0]
+            head = "\n".join(lines[max(0, first - 4):first])
+            if not re.search(r"参考|References|文献", head, re.I):
+                lines[first:first] = ["## 参考", ""]
+                text = "\n".join(lines)
+            return text
+
+        if not missing:
+            return text
+        block = ["## 参考", ""]
+        for num, url in missing:
+            block.append("- [%s] %s" % (num, url))
+        return text + "\n\n" + "\n".join(block)
 
     # 块级
     def _blocks(self, node: Node) -> List[str]:
@@ -1296,7 +1434,9 @@ class MarkdownRenderer:
             if special is not None:
                 return special
             return self._inline_children(node)
-        if tag in ("sup", "sub", "u", "mark", "kbd", "samp", "var", "q"):
+        if tag == "sup":
+            return self._sup(node)
+        if tag in ("sub", "u", "mark", "kbd", "samp", "var", "q"):
             inner = self._inline_children(node)
             if not inner.strip():
                 return ""
@@ -1307,6 +1447,24 @@ class MarkdownRenderer:
             inner = " ".join(b for b in self._blocks(node) if b.strip())
             return (" " + inner + " ") if inner.strip() else ""
         return self._inline_children(node)
+
+    def _sup(self, node: Node) -> str:
+        """1.1.3: 引用角标 <sup>[1]</sup> -> 纯文本 [1]; 普通上标 <sup>2</sup> 保留 HTML."""
+        inner = self._inline_children(node)
+        text = inner.strip()
+        if not text:
+            return ""
+        m = _REF_LINK_RE.match(text) or _REF_SUP_RE.match(text)
+        if not m:
+            return "<sup>%s</sup>" % inner
+        num = m.group(1)
+        url = ""
+        if m.re is _REF_LINK_RE:
+            url = m.group(2).strip()
+        if not url:
+            url = (node.get("data-url") or node.get("data-href") or "").strip()
+        self.citations.append((num, url))
+        return "[%s]" % num
 
     def _anchor(self, node: Node) -> str:
         text = self._inline_children(node)
@@ -1414,7 +1572,7 @@ class ZhihuClient:
             try:
                 return self._fetch_via_api(ref)
             except ZhihuError as api_error:
-                raise ZhihuError("%s\n  （备用 v4 API 也失败了: %s）"
+                raise ZhihuError("%s\n  (备用 v4 API 也失败了: %s) "
                                  % (page_error, str(api_error).splitlines()[0])) from None
 
     # 方式一: 解析页面内嵌 JSON
@@ -2220,7 +2378,7 @@ Cookie 也可以放在 ./cookie.txt、~/.zhihu2md-cookie,
 _EMBED_REF_RE = re.compile(r"question/\d+/answer/\d+|/answer/\d+|/p/\d+|answer/\d+|p/\d+")
 
 def _collect_refs(args: argparse.Namespace) -> Tuple[List[Ref], List[Tuple[str, str]]]:
-    """收集要抓的编号，返回 (有效的 Ref 列表, 无法识别的行).
+    """收集要抓的编号, 返回 (有效的 Ref 列表, 无法识别的行).
     除了「一行一个编号」, 也能直接喂一整段从收藏夹/网页里复制出来的文字:
     识别不出来时会把行内出现的链接都抠出来.
     """
@@ -2278,7 +2436,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         warn(str(exc))
         return 2
     for line, reason in bad:
-        warn("跳过一行（%s）：%s" % (reason, line))
+        warn("跳过一行 (%s) : %s" % (reason, line))
     if not refs:
         if not bad:
             parser.print_help()
@@ -2310,7 +2468,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         outdir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
-        warn("无法创建输出目录 %s：%s" % (outdir, exc))
+        warn("无法创建输出目录 %s: %s" % (outdir, exc))
         return 2
 
     http = HttpClient(cookie=cookie, timeout=args.timeout, retries=args.retries, proxy=args.proxy)
