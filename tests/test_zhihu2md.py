@@ -698,7 +698,8 @@ class FormulaEncodingTests(unittest.TestCase):
         md = self.render_img(EQUATION_URL + "a%2Bb", 'eeimg="1"')
         self.assertIn("$a+b$", md)
 
-    # 1.1.2 新增: 结尾 \\ 与短公式
+    # ---- 1.1.2 新增: 结尾 \\ 与短公式 ----
+
     def test_inline_trailing_double_backslash_removed(self):
         # 结尾的 \\ 会把闭合 $ 转义掉, 必须去掉 (1.1.2)
         md = self.render_img(EQUATION_URL + "x%3D1%5C%5C", 'eeimg="1"')
@@ -747,6 +748,7 @@ class RepairToolTests(unittest.TestCase):
         self.assertEqual(count, 0)
         self.assertEqual(clean, fixed)
 
+    # 1.1.2 新增: 结尾 \\ 以及短公式 / 行内换行 ----
     def test_repair_trailing_backslash_keeps_real_plus(self):
         # 只删结尾 \\, 不能把 a+b 的加号吃掉 (1.1.2)
         broken = "行内 $a+b\\\\$ 结束\n"
@@ -881,10 +883,40 @@ class MathCommandTests(unittest.TestCase):
         self.assertEqual(z.strip_empty_tags(r"x\tag{1.2}"), r"x\tag{1.2}")
 
 class ReferenceTests(unittest.TestCase):
-    """1.1.3 新增: 参考文献角标 -> [N] + 文末 ## 参考."""
+    """1.1.3: 参考文献角标; 1.1.4: 注释正文 + 默认可点击脚注 + bracket 转义."""
+    def render(self, html: str, ref_style: str = "footnote") -> str:
+        return z.MarkdownRenderer(ref_style=ref_style).render(z.parse_html(html))
 
-    def render(self, html: str) -> str:
-        return z.MarkdownRenderer().render(z.parse_html(html))
+    def test_annotation_text_kept(self):
+        # 知乎长注释放在 data-text 里, 旧版只看链接会整段丢失 (1.1.4)
+        md = self.render('<p>正文<sup data-numero="29" data-text="这是一段很长的注释">[29]</sup>。</p>',
+                         ref_style="bracket")
+        self.assertIn("[29]", md)
+        self.assertIn("## 参考", md)
+        self.assertIn("- \\[29\\] 这是一段很长的注释", md)
+
+    def test_annotation_with_url(self):
+        md = self.render('<p>正文<sup data-text="注释内容" data-url="https://a.example/x">[3]</sup></p>',
+                         ref_style="bracket")
+        self.assertIn("- \\[3\\] 注释内容 [链接](https://a.example/x)", md)
+
+    def test_bracket_escaped_against_task_checkbox(self):
+        # "- [2] ..." 会被 Obsidian 当成任务复选框(显示成 ☑), 必须转义 (1.1.4)
+        md = self.render('<p>x<sup data-text="注释">[2]</sup></p>', ref_style="bracket")
+        self.assertNotIn("\n- [2]", md)
+        self.assertIn("- \\[2\\]", md)
+
+    def test_default_is_clickable_footnote(self):
+        # 默认样式: 文中 [^N] + 文末定义, Obsidian 可点击跳转 (1.1.4)
+        md = self.render('<p>正文<sup data-text="注释内容">[5]</sup></p>')
+        self.assertIn("[^5]", md)
+        self.assertIn("[^5]: 注释内容", md)
+        self.assertNotIn("## 参考", md)
+
+    def test_footnote_long_annotation_single_line(self):
+        # 脚注定义必须单行, 换行要压成空格
+        md = self.render('<p>x<sup data-text="第一行\n第二行">[7]</sup></p>')
+        self.assertIn("[^7]: 第一行 第二行", md)
 
     def test_sup_citation_becomes_bracket(self):
         md = self.render("<p>应该<sup>[1]</sup>定义成能量密度。</p>")
@@ -896,18 +928,18 @@ class ReferenceTests(unittest.TestCase):
         self.assertIn("<sup>2</sup>", md)
 
     def test_reference_urls_appended(self):
-        md = self.render('<p>引用<sup data-url="https://example.com/a">[1]</sup>。</p>')
+        md = self.render('<p>引用<sup data-url="https://example.com/a">[1]</sup>。</p>', ref_style="bracket")
         self.assertIn("[1]", md)
         self.assertIn("## 参考", md)
-        self.assertIn("- [1] https://example.com/a", md)
+        self.assertIn("- \\[1\\] https://example.com/a", md)
 
     def test_existing_entries_get_heading(self):
-        md = self.render("<p>正文<sup>[1]</sup>。</p><p>[1] 作者. 标题.</p>")
+        md = self.render("<p>正文<sup>[1]</sup>。</p><p>[1] 作者. 标题.</p>", ref_style="bracket")
         self.assertIn("## 参考", md)
         self.assertIn("[1] 作者. 标题.", md)
 
     def test_no_citation_no_section(self):
-        md = self.render("<p>没有引用。</p>")
+        md = self.render("<p>没有引用。</p>", ref_style="bracket")
         self.assertNotIn("## 参考", md)
 
     def test_repair_bold_and_bracket_delims(self):

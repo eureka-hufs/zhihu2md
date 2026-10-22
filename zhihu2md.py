@@ -34,7 +34,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
-__version__ = "1.1.3"
+__version__ = "1.1.4"
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -375,12 +375,14 @@ class Ref:
             return "https://www.zhihu.com/question/%s/answer/%s" % (self.question_id, self.target_id)
         return "https://www.zhihu.com/answer/%s" % self.target_id
 
+
 _ARTICLE_RE = re.compile(r"(?:^|/)p/(\d{1,20})")
 _QA_RE = re.compile(r"(?:^|/)question/(\d{1,20})/answer/(\d{1,20})")
 _ANSWER_RE = re.compile(r"(?:^|/)answer/(\d{1,20})")
 _DIGITS_RE = re.compile(r"^\d{5,}$")
 _DOMAIN_RE = re.compile(r"^(?:[a-z0-9-]+\.)*zhihu\.com/", re.I)
 _LINK_TARGET_RE = re.compile(r"[?&]target=([^&]+)")
+
 
 def _normalize_ref_text(raw: str) -> str:
     s = (raw or "").strip().strip("\"'<>()[]\u200b \t\r\n")
@@ -659,7 +661,7 @@ class HttpClient:
         extra_headers: Optional[Dict[str, str]] = None,
         allow_status: Sequence[int] = (),
     ) -> Tuple[int, Dict[str, str], bytes]:
-        """GET 一个 URL，返回 (状态码, 响应头, 响应体)。失败会重试。"""
+        """GET 一个 URL, 返回 (状态码, 响应头, 响应体)。失败会重试。"""
         opener = self._opener()
         last_err: Optional[BaseException] = None
         for attempt in range(1, self.retries + 1):
@@ -729,7 +731,7 @@ class HttpClient:
                 "           做完验证后再试; 或者降低抓取频率."
             )
             if "login" in head.lower() or "signin" in head.lower():
-                hint += "\n  （响应看起来是登录页, 说明 Cookie 缺失或已过期.）"
+                hint += "\n  (响应看起来是登录页, 说明 Cookie 缺失或已过期.) "
             return hint
         return "知乎返回 %d：%s" % (status, head[:200])
 
@@ -835,6 +837,14 @@ _REF_LINK_RE = re.compile(r"^[\[［](\d{1,3})[\]］]\(([^)]*)\)$")
 # 正文里作者手写的参考条目: 行首 "[1] 作者. 标题."
 _REF_ENTRY_LINE_RE = re.compile(r"^\[(\d{1,3})\]\s+\S", re.M)
 
+def _clean_annotation(text: str) -> str:
+    """整理知乎角标里的注释文本: 去首尾空白, 压缩换行, 去掉开头的 ^ / [N]. """
+    text = (text or "").replace("\u00a0", " ").replace("\r", " ").replace("\n", " ")
+    text = re.sub(r"[ \t]{2,}", " ", text).strip()
+    text = re.sub(r"^\^+\s*", "", text)
+    text = re.sub(r"^\[\d{1,3}\]\s*", "", text)
+    return text.strip()
+
 def plus_encoding_evidence(text: str) -> int:
     r"""判断一段公式文本是否被"空格 -> '+'"编码过: 证据越多越像.
     只看**紧贴**结构符号的加号 (`+\int`、`=+`、`+[`) 和连续加号,
@@ -853,7 +863,6 @@ def strong_plus_count(text: str) -> int:
 
 def plus_repair_suspicion(text: str) -> bool:
     """判断公式里的 '+' 是否可能是"空格被编码"的结果.
-
     三级判断, 从强到弱:
       1. 出现 `++`: 连续加号几乎不可能是运算;
       2. 出现 `+=`、`=+`、`+<` 这类紧贴关系符/尖括号的组合: 正常数学里极少见;
@@ -971,6 +980,7 @@ _FONT_SWITCHES = {
 }
 _FONT_DROP_RE = re.compile(r"\\boldmath(?![A-Za-z])")
 
+
 def _match_brace(tex: str, start: int) -> int:
     """返回与 tex[start]=='{' 配对的 '}' 下标(处理 \\{ \\}); 找不到返回 -1."""
     depth = 0
@@ -993,7 +1003,6 @@ def _match_brace(tex: str, start: int) -> int:
 # 一起包进 \mathit{...} / \mathrm{...}, 让整个 array 渲染失败.
 _SCOPE_STOP_WORDS = {"cr", "hline", "end", "right", "middle", "tag", "label",
                      "over", "atop", "choose", "begin"}
-
 
 def _scope_end(tex: str, start: int) -> int:
     """从 start 往后找到"当前花括号层级结束"的位置(未配对的 '}'、结构符号、或末尾).
@@ -1044,6 +1053,7 @@ def normalize_math_commands(tex: str) -> str:
     return tex
 
 _EMPTY_TAG_RE = re.compile(r"\\tag\*?\s*\{\s*\}")
+
 def strip_empty_tags(tex: str) -> str:
     r"""1.1.3: 去掉空的 \tag*{} / \tag{}.
 
@@ -1054,8 +1064,10 @@ def strip_empty_tags(tex: str) -> str:
 
 _LEFT_RE = re.compile(r"\\left(?![A-Za-z])")
 _RIGHT_RE = re.compile(r"\\right(?![A-Za-z])")
+
 def delimiters_balanced(tex: str) -> bool:
     r"""\\left 与 \\right 是否成对.
+
     MathJax/TeX 要求 \\left...\\right 在同一分组层级内配对, 如果包装时把
     `}` 插在两者之间, 会报 "Extra \\left or missing \\right".
     """
@@ -1083,7 +1095,6 @@ def _balanced(tex: str) -> bool:
 
 def _normalize_once(tex: str) -> str:
     r"""1.1.3 新增: 让公式在 Obsidian(MathJax) 也能渲染(单轮).
-
     1) 去掉外层定界符 \[ \] \( \): 作者常在 tex 里写 `\[ g=... \]`,
        导出成 `$\[...\]$` 后 MathJax 把它当公式定界符 -> 报错.
        只删"独立"的定界符: `\left[`、`\\[2pt]` 这类前面是反斜杠, 不动.
@@ -1308,11 +1319,15 @@ def clean_math(tex: str, display: bool) -> str:
 
 class MarkdownRenderer:
     """把知乎的正文 HTML 转成 Obsidian / CommonMark 友好的 Markdown."""
-    def __init__(self, base_url: str = "") -> None:
+    def __init__(self, base_url: str = "", ref_style: str = "footnote") -> None:
         self.base_url = base_url or ZHIHU_HOME
         self.images: List[ImageRef] = []
         self.warnings: List[str] = []
-        self.citations: List[Tuple[str, str]] = []   # 1.1.3: (编号, 链接) 引用角标
+        # 1.1.4: (编号, 注释正文, 链接) —— 知乎的角标除了链接, 还常带 data-text 注释
+        self.citations: List[Tuple[str, str, str]] = []
+        # 默认用脚注: "- [2] ..." 会被 Obsidian 当成任务复选框(显示成 ☑),
+        # 脚注 [^2] 既能点击跳转, 也没有这个坑.
+        self.ref_style = ref_style if ref_style in ("bracket", "footnote") else "footnote"
 
     # 对外入口
     def render(self, node: Node) -> str:
@@ -1322,26 +1337,24 @@ class MarkdownRenderer:
         text = self._attach_references(text.strip())
         return text + "\n"
 
-    # 1.1.3: 参考文献
+    # 1.1.4: 注释正文 + 可点击脚注
     def _attach_references(self, text: str) -> str:
         """补上"参考文献"小节.
-
-        两种情况:
-          * 正文里作者本来写了 "[1] 作者. 标题." 这样的条目 -> 只在前面补 "## 参考" 标题
-          * 正文里没有条目, 但角标带链接(data-url / <a href>) -> 按 "[1] 链接" 生成列表
-        没有角标也没有条目时原样返回.
+        条目来源优先级: 正文里已有的 "[N] ..." 行 > 角标的 data-text 注释 > data-url 链接.
+        ref_style="footnote" 时改用 Obsidian 原生脚注 [^N] / [^N]: , 可点击跳转.
         """
         have = set(_REF_ENTRY_LINE_RE.findall(text))
-        missing: List[Tuple[str, str]] = []
+        entries: List[Tuple[str, str, str]] = []
         seen = set()
-        for num, url in self.citations:
-            # 1.1.3: 只给"有链接"的角标生成条目; 没链接又没原文条目的,
-            # 硬造一个"(未给出来源)"反而污染笔记, 不如只保留文中的 [N]
-            if not url or num in have or num in seen:
+        for num, annotation, url in self.citations:
+            if num in have or num in seen:
+                continue
+            annotation = _clean_annotation(annotation)
+            if not annotation and not url:
                 continue
             seen.add(num)
-            missing.append((num, url))
-        missing.sort(key=lambda item: int(item[0]))
+            entries.append((num, annotation, url))
+        entries.sort(key=lambda item: int(item[0]))
 
         lines = text.split("\n")
         entry_lines = [i for i, line in enumerate(lines) if _REF_ENTRY_LINE_RE.match(line)]
@@ -1353,11 +1366,35 @@ class MarkdownRenderer:
                 text = "\n".join(lines)
             return text
 
-        if not missing:
+        if not entries:
             return text
+
+        if self.ref_style == "footnote":
+            # 文中 [N] -> [^N] (只转换有定义的编号, 避免出现悬空脚注)
+            nums = {num for num, _a, _u in entries}
+
+            def _mark(m: "re.Match[str]") -> str:
+                if m.group(1) in nums and not text[m.end():m.end() + 1] == "(":
+                    return "[^%s]" % m.group(1)
+                return m.group(0)
+
+            text = re.sub(r"\[(\d{1,3})\](?!\()", _mark, text)
+            tail = []
+            for num, annotation, url in entries:
+                body = annotation
+                if url:
+                    body = ("%s [链接](%s)" % (body, url)) if body else url
+                tail.append("[^%s]: %s" % (num, body.replace("\n", " ").strip()))
+            return text + "\n\n" + "\n".join(tail)
+
         block = ["## 参考", ""]
-        for num, url in missing:
-            block.append("- [%s] %s" % (num, url))
+        for num, annotation, url in entries:
+            # 方括号必须转义: "- [2] ..." 会被 Obsidian 当成任务复选框(显示成 ☑),
+            # 两位数 [10] 反而正常, 所以只在单个数字时看起来"变成打勾".
+            if annotation and url:
+                block.append("- \\[%s\\] %s [链接](%s)" % (num, annotation, url))
+            else:
+                block.append("- \\[%s\\] %s" % (num, annotation or url))
         return text + "\n\n" + "\n".join(block)
 
     # 块级
@@ -1703,7 +1740,11 @@ class MarkdownRenderer:
         return self._inline_children(node)
 
     def _sup(self, node: Node) -> str:
-        """1.1.3: 引用角标 <sup>[1]</sup> -> 纯文本 [1]; 普通上标 <sup>2</sup> 保留 HTML."""
+        """引用角标 <sup>[1]</sup> -> 纯文本 [1]; 普通上标 <sup>2</sup> 保留 HTML.
+
+        1.1.4: 同时收集 data-text(注释正文) 与 data-url(链接), 供文末"参考"使用.
+        知乎的长注释只放在 data-text 里, 旧版只看 data-url, 导致注释全丢.
+        """
         inner = self._inline_children(node)
         text = inner.strip()
         if not text:
@@ -1717,7 +1758,11 @@ class MarkdownRenderer:
             url = m.group(2).strip()
         if not url:
             url = (node.get("data-url") or node.get("data-href") or "").strip()
-        self.citations.append((num, url))
+        annotation = (node.get("data-text") or node.get("data-content")
+                      or node.get("title") or "").strip()
+        if not annotation and m.re is _REF_LINK_RE and text != m.group(2).strip():
+            annotation = ""
+        self.citations.append((num, annotation, url))
         return "[%s]" % num
 
     def _anchor(self, node: Node) -> str:
@@ -2228,6 +2273,8 @@ class Saver:
         force: bool = False,
         skip_existing: bool = False,
         workers: int = 4,
+        ref_style: str = "footnote",
+        dump_html: bool = False,
     ) -> None:
         self.outdir = Path(outdir)
         self.http = http
@@ -2238,6 +2285,8 @@ class Saver:
         self.force = force
         self.skip_existing = skip_existing
         self.workers = workers
+        self.ref_style = ref_style
+        self.dump_html = dump_html
 
     # 主流程
     def save(self, doc: Document) -> SaveResult:
@@ -2246,8 +2295,15 @@ class Saver:
         if self.skip_existing and md_path.exists():
             raise Skipped("已存在, 跳过: %s" % md_path.name)
 
-        renderer = MarkdownRenderer(base_url=doc.url)
+        renderer = MarkdownRenderer(base_url=doc.url, ref_style=self.ref_style)
         body = renderer.render(parse_html(doc.content_html))
+        if self.dump_html:
+            # 1.1.4: 调试用 —— 把知乎原始正文 HTML 存成同名 .html, 便于分析丢失的结构
+            try:
+                self.outdir.mkdir(parents=True, exist_ok=True)
+                md_path.with_suffix(".html").write_text(doc.content_html, encoding="utf-8")
+            except OSError:
+                pass
 
         mapping: Dict[int, str] = {}
         images_ok = images_failed = 0
@@ -2624,8 +2680,12 @@ Cookie 也可以放在 ./cookie.txt、~/.zhihu2md-cookie,
     parser.add_argument("--retries", type=int, default=3, help="失败重试次数 (默认 3)")
     parser.add_argument("--proxy", default="", help="HTTP/HTTPS 代理, 例如 http://127.0.0.1:7890")
     parser.add_argument("--workers", type=int, default=4, help="图片并发下载线程数 (默认 4)")
+    parser.add_argument("--ref-style", choices=("bracket", "footnote"), default="footnote",
+                        help="参考角标样式: footnote=可点击脚注 [^1] (默认), bracket=[1] 纯文本")
     parser.add_argument("--delay", type=float, default=1.0, help="多条之间间隔秒数 (默认 1, 避免触发风控)")
     parser.add_argument("--debug", action="store_true", help="输出调试信息, 并把抓取失败的原始 HTML 保存下来")
+    parser.add_argument("--dump-html", action="store_true",
+                        help="把知乎原始正文 HTML 另存为同名 .html（排查丢失内容时用）")
     parser.add_argument("-v", "--verbose", action="store_true", help="同 --debug 的日志级别")
     parser.add_argument("--version", action="version", version="zhihu2md %s" % __version__)
     return parser
@@ -2739,6 +2799,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         force=args.force,
         skip_existing=args.skip_existing,
         workers=args.workers,
+        ref_style=args.ref_style,
+        dump_html=bool(getattr(args, "dump_html", False)),
     )
 
     log("输出目录: %s" % outdir.resolve())
