@@ -89,6 +89,7 @@ def _tidy(body: str, display: bool, fix_plus: bool = True) -> str:
     body = core.normalize_math_commands(body) # 1.1.3: \bold/\bm/\scr、\[ \] 归一化
     body = core.fix_array_columns(body)       # 1.1.3: 补齐 array 列声明
     body = core.strip_empty_tags(body)        # 1.1.3: 去掉空的 \tag*{}
+    body = core.normalize_arrow_hacks(body)   # 1.1.5: 带 $ 的箭头写法 -> \vec 等
     if display:
         body = ALIGN_BEGIN_RE.sub(lambda _m: "\\begin{aligned}", body)
         body = ALIGN_END_RE.sub(lambda _m: "\\end{aligned}", body)
@@ -108,7 +109,11 @@ def _needs_repair(body: str) -> tuple[bool, bool]:
     needs_array = core.fix_array_columns(text) != text
     # 1.1.3: 空的 \tag*{} 在 MathJax 下会报错
     needs_tag = core.strip_empty_tags(text) != text
-    return (needs_tail or needs_plus or needs_font or needs_array or needs_tag), needs_plus
+    # 1.1.5: 带 $ 的箭头 hack / 公式里残留 $ 也要修
+    needs_arrow = core.normalize_arrow_hacks(text) != text
+    needs_dollar = "$" in text
+    return (needs_tail or needs_plus or needs_font or needs_array or needs_tag
+            or needs_arrow or needs_dollar), needs_plus
 
 def repair_block(body: str) -> str:
     """修复一个 $$ 块 (含换行缩进): 不值得修就原样返回."""
@@ -143,11 +148,13 @@ def _repair_inline_in_text(text: str) -> tuple[str, int]:
                     return match.group(0)
                 fixed = repair_inline(body)
                 has_linebreak = "\\\\" in fixed
-                if fixed == body and not has_linebreak:
+                has_dollar = "$" in fixed
+                if fixed == body and not has_linebreak and not has_dollar:
                     return match.group(0)
                 count += 1
-                if has_linebreak:
-                    # 1.1.2: 行内 $...$ 里不能有换行符, 改成整段公式
+                if has_linebreak or has_dollar:
+                    # 1.1.2: 行内 $...$ 里不能有换行符
+                    # 1.1.5: 公式里残留 $ 会把行内公式提前截断 -> 改成整段公式
                     return "$$\n" + core.strip_trailing_breaks(fixed).strip() + "\n$$"
                 return "$" + fixed + "$"
 
@@ -180,6 +187,13 @@ def _repair_text_once(text: str) -> tuple[str, int]:
 
     protected = FENCE_RE.sub(hide, text)
 
+    # 1.1.5: 先处理"带 $ 的箭头写法". 它里面的 $ 会让行内公式配对全乱,
+    # 必须在解析 $...$ 之前就消灭掉.
+    arrow = (len(core._ARROW_IDIOM_RE.findall(protected))
+             + len(core._HBOX_ARROW_RE.findall(protected)))
+    if arrow:
+        protected = core.normalize_arrow_hacks(protected)
+
     blocks = 0
 
     def repl_block(match: "re.Match[str]") -> str:
@@ -198,7 +212,7 @@ def _repair_text_once(text: str) -> tuple[str, int]:
         return fences[int(match.group(1))]
 
     protected = re.sub(r"\x00FENCE(\d+)\x00", restore, protected)
-    return protected, blocks + inline_count
+    return protected, blocks + inline_count + arrow
 
 def iter_md_files(paths: list[Path]):
     for path in paths:

@@ -711,6 +711,19 @@ class FormulaEncodingTests(unittest.TestCase):
         md = self.render_img(EQUATION_URL + "a%3D1%5C%5Cb%3D2", 'eeimg="1"')
         self.assertIn("$$", md)
 
+    def test_formula_with_dollar_promoted_to_display(self):
+        # 公式里残留 $ 会把行内 $...$ 提前截断 -> 升级成整段公式 (1.1.5)
+        md = self.render_img(EQUATION_URL + "a%3D%24x%24", 'eeimg="1"')
+        self.assertIn("$$", md)
+
+    def test_vector_arrow_stays_inline(self):
+        # 箭头写法换成 \vec 后不应再被升级成整段 (1.1.5)
+        tex = r"\underset{\raise0.3em\hbox{$\smash{\scriptscriptstyle\rightarrow}$}}{v}"
+        raw = urllib.parse.quote(tex, safe="").replace("%20", "+")
+        md = self.render_img(EQUATION_URL + raw, 'eeimg="1"')
+        self.assertIn(r"$\vec{v}$", md)
+
+
     def test_short_formula_plus_suspicion(self):
         # 短公式 `\delta+S+=+0` 只有 2 个强证据, 旧阈值 3 会漏 (1.1.2)
         self.assertTrue(z.plus_repair_suspicion(r"\delta+S+=+0"))
@@ -882,6 +895,14 @@ class MathCommandTests(unittest.TestCase):
         # 非空 tag 要保留
         self.assertEqual(z.strip_empty_tags(r"x\tag{1.2}"), r"x\tag{1.2}")
 
+    def test_vector_arrow_idiom_to_vec(self):
+        # 知乎的箭头写法带 $, 会把 Markdown 行内公式截断; 换成 \vec (1.1.5)
+        src = r"\underset{\raise0.3em\hbox{$\smash{\scriptscriptstyle\rightarrow}$}}{v}"
+        self.assertEqual(z.normalize_arrow_hacks(src), r"\vec{v}")
+
+    def test_plain_hbox_arrow(self):
+        self.assertEqual(z.normalize_arrow_hacks(r"\hbox{$\rightarrow$}"), r"\rightarrow")
+
 class ReferenceTests(unittest.TestCase):
     """1.1.3: 参考文献角标; 1.1.4: 注释正文 + 默认可点击脚注 + bracket 转义."""
     def render(self, html: str, ref_style: str = "footnote") -> str:
@@ -955,6 +976,15 @@ class ReferenceTests(unittest.TestCase):
         fixed, count = repair.repair_text(clean)
         self.assertEqual(count, 0)
         self.assertEqual(clean, fixed)
+
+    def test_repair_vector_arrow(self):
+        # 带 $ 的箭头写法会让行内公式配对乱掉, 修复工具要先换成 \vec (1.1.5)
+        broken = ("x $\\underset{\\raise0.3em\\hbox{$\\smash{\\scriptscriptstyle\\rightarrow}$}}"
+                  "{v}$ 结束\n")
+        fixed, count = repair.repair_text(broken)
+        self.assertGreaterEqual(count, 1)
+        self.assertIn(r"\vec{v}", fixed)
+        self.assertNotIn(r"\hbox{$", fixed)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

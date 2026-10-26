@@ -34,7 +34,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
-__version__ = "1.1.4"
+__version__ = "1.1.5"
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -1302,6 +1302,41 @@ def fix_array_columns(tex: str) -> str:
         i = end
     return "".join(out)
 
+# 1.1.5: 知乎常见的箭头写法 \underset{\raise0.3em\hbox{$\smash{\scriptscriptstyle\rightarrow}$}}{v}
+# 里面带 `$`, 会把 Markdown 的行内公式提前截断; 统一换成 \vec / \overleftarrow 等.
+_ARROW_TARGET = {
+    "rightarrow": "vec",
+    "to": "vec",
+    "leftarrow": "overleftarrow",
+    "leftrightarrow": "overleftrightarrow",
+}
+_ARROW_IDIOM_RE = re.compile(
+    r"\\underset\s*\{\s*\\raise\s*[0-9.]+\s*(?:em|ex|pt)\s*\\hbox\s*\{\s*\$?\s*"
+    r"\\smash\s*\{\s*\\scriptscriptstyle\s*\\(rightarrow|to|leftarrow|leftrightarrow)\s*\}\s*\$?\s*\}\s*\}\s*"
+    r"\{\s*([^{}]+?)\s*\}"
+)
+_HBOX_ARROW_RE = re.compile(
+    r"\\hbox\s*\{\s*\$?\s*\\(rightarrow|to|leftarrow|leftrightarrow)\s*\$?\s*\}"
+)
+
+def normalize_arrow_hacks(tex: str) -> str:
+    r"""1.1.5: 把带 `$` 的箭头 hack 换成标准写法.
+
+    知乎上画向量箭头的常见写法是
+        \underset{\raise0.3em\hbox{$\smash{\scriptscriptstyle\rightarrow}$}}{v}
+    里面的 `$` 会让 Obsidian 的 `$...$` 解析提前结束, 整条公式变成源码.
+    换成 `\vec{v}` 后既没有 `$`, 渲染效果也一样.
+    """
+    tex = tex or ""
+
+    def _under(m):
+        target, body = m.group(1), m.group(2)
+        return "\\%s{%s}" % (_ARROW_TARGET.get(target, "vec"), body)
+
+    tex = _ARROW_IDIOM_RE.sub(_under, tex)
+    tex = _HBOX_ARROW_RE.sub(lambda m: "\\" + m.group(1), tex)
+    return tex
+
 def clean_math(tex: str, display: bool) -> str:
     """合并多余空白; 整段公式里的 align* 等换成 MathJax/Obsidian 更稳的 aligned."""
     tex = (tex or "").replace("\u00a0", " ").replace("\r", " ").replace("\n", " ")
@@ -1311,6 +1346,7 @@ def clean_math(tex: str, display: bool) -> str:
     tex = normalize_math_commands(tex)   # 1.1.3: 字体命令/外层定界符归一化
     tex = fix_array_columns(tex)         # 1.1.3: 补齐 array 列声明(KaTeX 能容错, MathJax 不行)
     tex = strip_empty_tags(tex)          # 1.1.3: 去掉空的 \tag*{} (MathJax 不接受)
+    tex = normalize_arrow_hacks(tex)     # 1.1.5: 带 $ 的箭头写法 -> \vec 等
     tex = tex.strip()
     if display:
         tex = _ALIGN_BEGIN_RE.sub(lambda _m: "\\begin{aligned}", tex)
@@ -1640,9 +1676,14 @@ class MarkdownRenderer:
         # 1.1.2 update: 先去掉结尾的 \ 或 \\, 再判断"是否整段公式".
         # 顺序反了的话 `x=1\\` 会被当成"含换行的整段公式"而变成 $$ 块.
         tex = strip_trailing_breaks(tex)
+        tex = normalize_arrow_hacks(tex)   # 1.1.5: 先换掉带 $ 的箭头写法, 再判断显示类型
         display = node.get("eeimg") == "2" or "\\begin{" in tex or "\\displaystyle" in tex
         if "\\\\" in tex:
             # 1.1.2 update: 带换行符的公式放进行内 $...$ 会渲染失败, 改当整段公式
+            display = True
+        if "$" in tex:
+            # 1.1.5: 公式里残留 $ (如 \hbox{$...$}) 会把行内 $...$ 提前截断,
+            # 升级成整段公式即可正常渲染.
             display = True
         tex = clean_math(tex, display)
         if not tex:
